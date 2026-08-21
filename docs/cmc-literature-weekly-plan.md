@@ -21,7 +21,7 @@
 
 ---
 
-## 2. 十一个关键发现
+## 2. 十二个关键发现
 
 ### 发现 1 — Google Drive 这一层可以完全去掉 【大幅简化】
 
@@ -39,11 +39,26 @@ Zotero 免费账户的 300MB 限制**只针对附件文件存储**；题录元�
 
 所以要补一类**查询式检索器**：带日期窗口按检索式查。好消息是 `BaseRetriever` 的契约（`_retrieve_raw_papers` + `convert_to_paper`）完全够用，只是前者内部换成按 profile 查询 —— 纯粹的插件加法。
 
-### 发现 3 — 检索式应当从 Zotero 语料自动派生 【两个项目的缝合点】
+### 发现 3 — 检索式从语料自动派生，但要按「主题簇」而非按分类树 【两个项目的缝合点】
 
-Zotero 分类（表征 / 活性 / 理化）本身就是主题标签。做法：按 collection path 分组语料，每组取 30–50 篇标题+摘要，让 DeepSeek 蒸馏出一组检索式 —— MeSH 主题词 + 自由词 + 布尔短语式，正好对应 literature-search skill 的 Wave 1 / Wave 2 分波检索思路。
+做法：取语料的标题+摘要，让 DeepSeek 蒸馏出检索式 —— MeSH 主题词 + 自由词 + 布尔短语式，正好对应 literature-search skill 的 Wave 1 / Wave 2 分波检索思路。结果缓存进 `config/query_profiles.yaml`，**每月刷新一次而不是每周重算**：省 token，也让周与周之间的召回口径稳定可比。检索回来的候选最后仍过 reranker 打分 —— **查询式检索保召回，embedding 重排保精度**。这是整套设计里最关键的一环。
 
-结果缓存进 `config/query_profiles.yaml`，**每月刷新一次而不是每周重算**：省 token，也让周与周之间的召回口径稳定可比。检索回来的候选最后仍然过现有 reranker 对全语料打分 —— **查询式检索保召回，embedding 重排保精度**。这是整套设计里最关键的一环。
+**但分组依据不能直接用 Zotero 分类树。** 看实际结构（见第 8 节）便知，这棵树混了四种维度：
+
+- **主题**：表征、活性、质谱、Charge variants、Size variants
+- **项目**：BJ044、KJ015、KJ017、KJ103（合计 42 篇，占语料 35%）
+- **分子类型**：双抗、ADC、生物类似药
+- **活动**：验证
+
+项目分类是最大的一块，却**没有主题一致性** —— BJ044 那 12 篇可能横跨表征、活性、验证，只因服务同一项目才归在一起，直接蒸馏必然得到噪音检索式。同时有 6 个分类只有 1–4 篇，**根本不够蒸馏**。
+
+**改法：`include_path` 全收，用 LLM 对语料做一次主题聚类。** 读全部语料的标题+摘要（约 120 篇，单次请求可容纳），聚成 4–6 个主题簇、每簇 15–30 篇，再逐簇蒸馏检索式。三个好处：
+
+1. 项目文献那 42 篇被**打散归入各主题簇** —— 讲电荷的归电荷簇，讲活性的归活性簇，正好补足小簇语料
+2. **「将来可能新增分类」自动解决** —— 新增不必改配置，重新聚类即可
+3. 聚类结果缓存进 `config/theme_clusters.yaml`，与检索式同周期（每月）刷新
+
+> 实现细节：`文献/**` **不匹配 `文献` 本身**（`glob.translate(recursive=True)` 的行为，已实测），顶层条目会被漏掉。`include_path` 须写成 `["文献", "文献/**"]` 两条。
 
 ### 发现 4 — 上图代理自动下载：不建议做 【不建议】
 
@@ -176,6 +191,33 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 
 **私有仓下 HTML 附件比仓库链接更实用**：组员点开附件即在浏览器中得到完整样式，无需是仓库 collaborator，也绕开了 Pages 的私有发布限制。
 
+### 发现 12 — 语料分布失衡 28 倍，必须按簇配额排序 【必须改造】
+
+`BaseReranker.rerank` 对**全语料求和**打分：
+
+```python
+scores = (sim * time_decay_weight).sum(axis=1)
+```
+
+按实际语料分布（第 8 节）算一下各分类能贡献的得分质量：
+
+| 分类 | 篇数 | 占比 |
+| --- | ---: | ---: |
+| Charge variants | 28 | 23.5% |
+| KJ103 | 26 | 21.8% |
+| 验证 | 23 | 19.3% |
+| Size variants | 15 | 12.6% |
+| BJ044 | 12 | 10.1% |
+| 表征 / KJ017 | 各 4 | 各 3.4% |
+| 双抗 | 3 | 2.5% |
+| **活性 / 质谱 / ADC / 生物类似药** | **各 1** | **各 0.8%** |
+
+一篇讲电荷变异体的候选能从 28 篇语料累积相似度；一篇同样优秀的活性分析文献只能从 1 篇得分。**28 倍差距** —— 周报会被电荷变异体与 KJ103 淹没，活性、质谱方向基本进不了 Top-25。
+
+**解决：按主题簇分别排序、各取配额，而非全语料统一取 Top-N。** 这不是可选优化。配额可按簇的语料量开方分配（抑制大簇但不抹平差异），并给每簇设下限 1–2 篇，保证每个方向都有产出。这同时满足「周报按主题分段」的需求。
+
+> 附带澄清：时间衰减权重本身**不是问题**。实算 n=120 时最新篇 2.14%、最旧篇 0.69%，极差仅 3.08 倍，log10 衰减在这个语料规模下相当平缓。
+
 ---
 
 ## 3. 三条路线对比
@@ -200,16 +242,17 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 
 ## 4. 推荐架构
 
-八个阶段，每周五 12:00 UTC 触发。
+九个阶段，每周五 12:00 UTC 触发。
 
 ```
 ① 拉取并过滤 Zotero 语料                                     [现有代码 0 改动]
-   pyzotero 拉全库元数据 → include_path glob 选中 理化/表征/活性
-   fetch_zotero_corpus + filter_corpus
+   pyzotero 拉全库元数据 → include_path: ["文献", "文献/**"] 全收
+   fetch_zotero_corpus + filter_corpus        语料 ≈ 120 篇
         ↓
-② 蒸馏检索式（每月一次，带缓存）                                    [新增]
-   按 collection 分组 → DeepSeek 提炼 MeSH 词 + 自由词 + 布尔式
-   → config/query_profiles.yaml
+② 主题聚类 + 蒸馏检索式（每月一次，带缓存）                          [新增]
+   DeepSeek 读全语料标题+摘要 → 聚成 4–6 个主题簇（打散项目分类）
+   逐簇提炼 MeSH 词 + 自由词 + 布尔式
+   → config/theme_clusters.yaml + config/query_profiles.yaml
         ↓
 ③ 多源检索（日期窗口 = 上周五 ~ 本周五）                      [4 个新检索器]
    新增：PubMed E-utilities · Europe PMC · Crossref · OpenAlex/S2
@@ -217,11 +260,16 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
         ↓
 ④ DOI 归一去重                                                    [新增]
    同一篇会同时出现在多个源；标题相似度兜底无 DOI 的预印本
+   再剔除 Zotero 已有 + state/seen_dois.json 中往期已推过的
    候选量级约 200–600 篇
         ↓
-⑤ 对全语料加权余弦重排                                    [现有代码 0 改动]
-   BaseReranker.rerank —— 较新入库的 Zotero 文献权重更高
-   取 Top-N（建议 15–25）
+⑤ 按主题簇分别排序、各取配额                                      [改造]
+   BaseReranker 打分后，不再全语料统一取 Top-N（见发现 12）
+   配额按簇语料量开方分配 + 每簇下限 1–2 篇
+        ↓
+⑤b 补位（仅当本周不足 15 篇时触发）                                [新增]
+   OpenAlex 按 cited_by_count 检索既往高引 + 高相关文献
+   补至 15 篇，报告中单列并标注「经典补位」
         ↓
 ⑥ 全文获取阶梯                                                    [新增]
    Unpaywall → Europe PMC OA → 预印本 → 出版商 OA，命中即停
@@ -235,7 +283,7 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
         ↓
 ⑧ 三层渲染 · 入库 · 群发                                    [新增 + 改造]
    同一份数据渲染三次（见发现 11）：
-     · reports/2026/2026-08-W3.md    → 仓库归档，按 理化/表征/活性 分三段
+     · reports/2026/2026-08-W3.md    → 仓库归档，按主题簇分段 + 补位单列
      · reports/2026/2026-08-W3.html  → 仓库 + 邮件附件，样式不受限
      · 邮件正文 HTML                  → 摘要式，table 布局，压在 102KB 内
    git commit & push 入库
@@ -251,7 +299,7 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 | Hydra 配置组合 | `config/{base,default,custom}.yaml` | 复用，增加 `search:` `fulltext:` `report:` `git:` 四段 |
 | Zotero 语料拉取 | `executor.py:fetch_zotero_corpus` | **0 改动** |
 | 分类路径过滤 | `executor.py:filter_corpus` · `utils.glob_match` | **0 改动** |
-| 加权相似度重排 | `reranker/base.py:rerank` | **0 改动** |
+| 加权相似度重排 | `reranker/base.py:rerank` | 打分逻辑 0 改动；**取 Top-N 改为按簇配额**（发现 12） |
 | 向量化后端 | `reranker/{local,api}.py` | 0 改动。建议用 `api` 省 runner 时间（见确认项 5） |
 | 检索器插件机制 | `retriever/base.py` | 0 改动，作为新检索器基类 |
 | 预印本检索器 ×4 | `retriever/*_retriever.py` | **0 改动**，直接纳入源清单 |
@@ -268,7 +316,10 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 
 **需要新增的模块：**
 
-- `search/profile.py` — 检索式蒸馏
+- `search/cluster.py` — 语料主题聚类（发现 3）
+- `search/profile.py` — 逐簇检索式蒸馏
+- `backfill.py` — 高引经典补位（OpenAlex `cited_by_count`）+ `state/seen_dois.json` 跨周去重
+- `quota.py` — 按簇配额分配（发现 12）
 - `retriever/{pubmed,europepmc,crossref,openalex}_retriever.py`
 - `dedup.py` — DOI 归一去重
 - `fulltext/resolver.py` — OA 全文阶梯
@@ -293,6 +344,9 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 | Semantic Scholar | **高**（前提是走无 key 模式） | key 难申请（见发现 5）；共享池需指数退避 | 采用作补充；429 频繁则可摘掉 |
 | bioRxiv / medRxiv / chemRxiv / arXiv | **高** | 已实现并有测试 | 采用 |
 | OA 全文 PDF（Unpaywall 阶梯） | **高** | 覆盖率非 100%，需降级路径 | 采用 |
+| 语料主题聚类（LLM） | **高** | 语料约 120 篇，单次请求可容纳 | 采用，月度刷新 |
+| 按簇配额排序 | **高** | 需自行实现配额分配 | 采用，见发现 12 |
+| 高引经典补位 | **高** | 需三重去重（Zotero 已有 / 往期已推 / 源间重复） | 采用，见 8.5 |
 | Google Scholar（直连） | 低 | 无 API，数据中心 IP 必遭 CAPTCHA | 放弃直连；改走 IMAP 摄取快讯邮件 |
 | 知网 CNKI（直连） | 低 | 无 API + 强反爬 + 许可禁止 | 放弃直连；改走 IMAP 摄取订阅邮件 |
 | X-MOL（直连） | 低 | 无公开 API；协议大概率禁止抓取；**robots.txt 未实测** | 不接入 —— 与 Crossref 覆盖重叠，属聚合器非数据源 |
@@ -331,10 +385,11 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 
 ### P0 — 不下载 PDF 的完整闭环（约 1 周，解决 80% 痛点）
 
-- 接通 Zotero 云端语料，确认 `include_path` 选中三个分类树
+- 接通 Zotero 云端语料，`include_path: ["文献", "文献/**"]`，核对实际入库篇数与摘要缺失情况
 - 办一个 NCBI API key（自助，秒出）；其余源全走无 key 模式 + 指数退避
-- 实现检索式蒸馏 + 四个查询式检索器 + DOI 去重
-- 复用现有 reranker 排序，取 Top-N
+- 语料主题聚类 + 逐簇检索式蒸馏（发现 3）
+- 四个查询式检索器 + DOI 去重（含剔除 Zotero 已有、往期已推）
+- reranker 打分 + **按簇配额取数**（发现 12）；不足 15 篇时走高引补位（8.5 节）
 - LLM 仅基于摘要做结构化抽取
 - 渲染周报 markdown，提交入库，发单人邮件自测
 
@@ -374,17 +429,79 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 
 ---
 
-## 8. 需要确认的事项
+## 8. 已确认的配置决策
 
-前两项直接决定 P0 能不能开工。
+七项确认已全部落定，P0 可以开工。
 
-1. **Zotero 客户端的「同步数据」开着吗？** 设置 → 同步。文件同步可以关（省 300MB 配额），但数据同步必须开，否则云端没有元数据可拉。这一项决定发现 1 是否成立。
-2. **理化 / 表征 / 活性三个分类在 Zotero 里的完整路径是什么？** 需要形如 `文献/表征/糖基化` 的完整层级名，用来写 `include_path` 的 glob 模式。
-3. **仓库设为私有，还是组员只收邮件附件？** 存 PDF 必须私有；私有仓的 PDF 链接要求组员是 collaborator。若不想加协作者，报告里就只放 DOI 链接、PDF 走邮件附件。
-4. **组员邮箱有几个？需要互相隐藏吗？** 影响用 To 还是 Bcc。超过五六个建议一律 Bcc。
-5. **向量化用哪家？** DeepSeek 官方 API 以对话补全为主，embedding 接口长期缺位（官方仓库至今挂着相关 open issue），请以 api.deepseek.com 当前文档为准。若确无，两个现成选项：仓库自带的 `local` reranker（sentence-transformers，runner 上多花一两分钟下模型），或硅基流动 / 智谱的 embedding API 走现成的 `api` reranker。生成仍用 DeepSeek，两者互不影响。
-6. **每周期望多少篇？** 建议 15–25。低于 15 容易漏，高于 25 就没人读得完，也拉高 LLM 成本。
-7. **周命名规则按「周五所在月份 + 该月第几个周五」可以吗？** 见发现 9。定下来之后文件名和报告头的日期区间就唯一确定了。
+### 8.1 Zotero 语料
+
+**数据同步已开启** —— 发现 1 成立，走 `pyzotero` 云端 API，Google Drive 层不再需要。
+
+实际分类树（截图为准，未来可能新增）：
+
+```
+文献                    1
+├── 表征                4   （含子分类）
+├── 活性                1
+├── 生物类似药           1
+├── 双抗                3
+├── 项目文献             0
+│   ├── BJ044          12
+│   ├── KJ015           0
+│   ├── KJ017           4
+│   └── KJ103          26
+├── 验证               23   （含子分类）
+├── 质谱                1
+├── ADC                 1
+├── Charge variants    28
+└── Size variants      15
+```
+
+可见条目约 120 篇（表征 / 验证 的子分类未展开，实际略高）。这一结构直接导出两条设计约束：**发现 3**（按主题簇而非分类树蒸馏检索式）与 **发现 12**（按簇配额排序）。
+
+配置：
+
+```yaml
+zotero:
+  include_path: ["文献", "文献/**"]   # 两条缺一不可，见发现 3 的实现细节
+```
+
+> ⚠️ **上线前请检查摘要缺失情况。** `fetch_zotero_corpus` 会过滤掉 `abstractNote == ''` 的条目。若有较多条目是直接拖 PDF 入库、未抓到摘要，实际可用语料将明显少于 120 篇。语料质量直接决定推荐质量，值得先在 Zotero 里补齐。
+
+### 8.2 仓库与交付
+
+**仓库私有。** 周报中只放 **DOI 链接**（不放仓库内 PDF 链接，因组员非 collaborator 打不开）；PDF 经**邮件附件**交付。PDF 仍入库 `library/` 作归档。
+
+> **附件配额取舍**：15–25 篇 OA PDF 合计可能超过 SMTP 的 20–25MB 上限。策略为**只附「本周优先读的 3–5 篇」**，其余留在仓库归档；正文列出全部 DOI 链接。
+
+### 8.3 邮件
+
+**收件人 10 人以内，一律走 Bcc** 互相隐藏。正文为摘要式 HTML（发现 11），附件为周报 HTML + 精选 PDF。
+
+### 8.4 模型
+
+| 用途 | 方案 |
+| --- | --- |
+| 生成（聚类 / 蒸馏 / 抽取） | DeepSeek API，模型 `deepseek-v4-flash`（以 api.deepseek.com 当前文档为准） |
+| 向量化（重排） | **仓库自带 `local` reranker**（`jina-embeddings-v5-text-nano-retrieval`） |
+
+DeepSeek 官方 API 无 embedding 接口，但**语料仅约 120 篇，本地模型几秒算完**，runner 上下载模型约 1–2 分钟，周跑一次完全可接受 —— 因此**不需要申请任何额外 key**。
+
+> ⚠️ **模型名不要放 Secret，放 `vars` 或直接写进 `custom.yaml`。** Secret 在 Actions 日志中会被遮蔽为 `***`，排障时无法确认实际调用了哪个模型。只有 `DEEPSEEK_API_KEY` 需要 Secret。
+
+### 8.5 篇数与补位
+
+**每周 15–25 篇。** 本周新文献不足 15 篇时，**用高引经典文献补位** —— 依据 Zotero 语料检索既往发表、高引用、相关度最高者。数据源用 OpenAlex（`cited_by_count` 字段可直接按引用排序）。
+
+三个必须处理的坑：
+
+1. **去重 Zotero 已有条目**（按 DOI），否则会推荐用户已收藏的文献
+2. **跨周去重** —— 往期周报出现过的不再推，需维护 `state/seen_dois.json`
+3. **周报中明确标注「经典补位」**，与本周新文献分列，否则读者会误认为是新发表
+
+### 8.6 周命名
+
+**「该周周五所在月份 + 该月第几个周五」**，文件名 `reports/2026/2026-08-W3.md`，报告头写明确区间 `覆盖期：2026-08-15 ~ 2026-08-21`。
 
 ---
 
