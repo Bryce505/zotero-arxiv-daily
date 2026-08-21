@@ -1,0 +1,158 @@
+{
+  "fingerprint": "f714dfcf382f9557",
+  "profiles": [
+    {
+      "cluster": "宿主细胞蛋白（HCP）分析",
+      "mesh_terms": [
+        "Proteins",
+        "Mass Spectrometry",
+        "Enzyme-Linked Immunosorbent Assay",
+        "Biological Products",
+        "Recombinant Proteins",
+        "Drug Contamination"
+      ],
+      "free_terms": [
+        "host cell protein",
+        "host cell proteins",
+        "HCP impurity",
+        "HCP analysis",
+        "host cell protein quantification",
+        "host cell protein identification",
+        "process-related impurities",
+        "CHO cell proteins",
+        "ELISA antibody coverage",
+        "LC-MS host cell proteins"
+      ],
+      "pubmed_query": "(\\\"host cell protein*\\\"[tiab] OR \\\"HCP\\\"[tiab] OR \\\"HCPs\\\"[tiab] OR \\\"process-related impurities\\\"[tiab] OR \\\"host cell protein impurities\\\"[tiab]) AND (\\\"mass spectrometry\\\"[tiab] OR \\\"LC-MS\\\"[tiab] OR \\\"LC-MS/MS\\\"[tiab] OR \\\"ELISA\\\"[tiab] OR \\\"immunoassay\\\"[tiab] OR \\\"immunocapture\\\"[tiab] OR \\\"Mass Spectrometry\\\"[Mesh] OR \\\"Enzyme-Linked Immunosorbent Assay\\\"[Mesh]) AND (\\\"Biological Products\\\"[Mesh] OR \\\"Recombinant Proteins\\\"[Mesh] OR \\\"biologics\\\"[tiab] OR \\\"biopharmaceuticals\\\"[tiab] OR \\\"therapeutic proteins\\\"[tiab] OR \\\"monoclonal antibodies\\\"[tiab] OR \\\"antibody drug*\\\"[tiab])",
+      "plain_query": "host cell protein analysis in biopharmaceuticals using mass spectrometry and ELISA identification quantification risk assessment"
+    },
+    {
+      "cluster": "蛋白质结构、功能与质谱表征",
+      "mesh_terms": [
+        "Protein Processing, Post-Translational",
+        "Glycosylation",
+        "Glycoproteins",
+        "Proteoglycans",
+        "Chondroitin Sulfates",
+        "Disulfides",
+        "Protein Conformation",
+        "Mass Spectrometry",
+        "Tandem Mass Spectrometry"
+      ],
+      "free_terms": [
+        "post-translational modification",
+        "glycosylation",
+        "glycoproteomics",
+        "glycoprotein",
+        "proteoglycan",
+        "chondroitin sulfate",
+        "disulfide bond",
+        "disulfide bridge",
+        "thiols",
+        "protein structure",
+        "structure-function",
+        "mass spectrometry",
+        "tandem mass spectrometry",
+        "LC-MS/MS",
+        "Orbitrap",
+        "MALDI",
+        "bikunin",
+        "urinary trypsin inhibitor"
+      ],
+      "pubmed_query": "(((\"Protein Processing, Post-Translational\"[MeSH] OR \"Glycosylation\"[MeSH] OR \"Glycoproteins\"[MeSH] OR \"Proteoglycans\"[MeSH] OR \"Chondroitin Sulfates\"[MeSH] OR \"Disulfides\"[MeSH] OR \"Protein Conformation\"[MeSH]) AND (\"Mass Spectrometry\"[MeSH] OR \"Tandem Mass Spectrometry\"[MeSH])) OR ((\"post-translational modification*\"[tiab] OR \"glycosylation\"[tiab] OR \"glycoproteomics\"[tiab] OR \"glycoprotein*\"[tiab] OR \"proteoglycan*\"[tiab] OR \"chondroitin sulfate\"[tiab] OR \"disulfide bond*\"[tiab] OR \"disulfide bridge*\"[tiab] OR \"thiol*\"[tiab] OR \"structure-function\"[tiab] OR \"bikunin\"[tiab] OR \"urinary trypsin inhibitor\"[tiab]) AND (\"mass spectrometry\"[tiab] OR \"mass spectrometric\"[tiab] OR \"tandem mass spectrometry\"[tiab] OR \"MS/MS\"[tiab] OR \"LC-MS\"[tiab] OR \"LC-MS/MS\"[tiab] OR \"Orbitrap\"[tiab] OR \"MALDI\"[tiab]))) AND (\"protein\"[tiab] OR \"proteins\"[tiab] OR \"peptide*\"[tiab] OR \"glycoprotein*\"[tiab] OR \"proteoglycan*\"[tiab] OR \"antibody*\"[tiab] OR \"immunoglobulin*\"[tiab] OR \"bikunin\"[tiab] OR \"urinary trypsin inhibitor\"[tiab] OR \"fusion protein*\"[tiab])",
+      "plain_query": "mass spectrometry, protein post-translational modifications (PTM), glycosylation, glycoproteins, proteoglycans, chondroitin sulfate, disulfide bonds/bridges, thiols, protein structure-function relationships"
+    },
+    {
+      "cluster": "电荷异质性与电泳分离分析",
+      "mesh_terms": [
+        "Isoelectric Focusing",
+        "Electrophoresis, Capillary",
+        "Chromatography, Ion Exchange",
+        "Antibodies, Monoclonal",
+        "Proteins"
+      ],
+      "free_terms": [
+        "charge heterogeneity",
+        "charge variants",
+        "charge-sensitive methods",
+        "imaged capillary isoelectric focusing",
+        "icIEF",
+        "cation exchange chromatography",
+        "capillary electrophoresis",
+        "monoclonal antibody",
+        "recombinant protein",
+        "biopharmaceutical"
+      ],
+      "pubmed_query": "((\"Isoelectric Focusing\"[MeSH] OR \"Electrophoresis, Capillary\"[MeSH] OR \"Chromatography, Ion Exchange\"[MeSH]) AND (charge[tiab] OR heterogeneity[tiab] OR variants[tiab]) AND (\"Antibodies, Monoclonal\"[MeSH] OR \"Proteins\"[MeSH] OR monoclonal[tiab] OR antibody[tiab] OR protein[tiab] OR biopharmaceutical[tiab])) OR ((charge heterogeneity[tiab] OR charge variants[tiab] OR icIEF[tiab] OR imaged capillary isoelectric focusing[tiab] OR cation exchange chromatography[tiab]) AND (monoclonal antibody[tiab] OR recombinant protein[tiab] OR biopharmaceutical[tiab]))",
+      "plain_query": "charge heterogeneity OR charge variants AND (capillary isoelectric focusing OR ion exchange chromatography OR capillary electrophoresis) AND (monoclonal antibody OR recombinant protein OR biopharmaceutical)"
+    },
+    {
+      "cluster": "色谱电泳纯度与含量分析",
+      "mesh_terms": [
+        "Chromatography, High Pressure Liquid",
+        "Chromatography, Gel",
+        "Chromatography, Hydrophobic Interaction",
+        "Electrophoresis, Capillary",
+        "Antibodies, Monoclonal",
+        "Protein Aggregates"
+      ],
+      "free_terms": [
+        "SEC",
+        "CE-SDS",
+        "HIC",
+        "HPLC",
+        "size exclusion chromatography",
+        "hydrophobic interaction chromatography",
+        "capillary electrophoresis",
+        "capillary gel electrophoresis",
+        "high performance liquid chromatography",
+        "purity",
+        "content",
+        "quantitation",
+        "quantification",
+        "size variants",
+        "aggregates",
+        "fragments",
+        "impurities",
+        "excipients",
+        "monoclonal antibody",
+        "mAb",
+        "protein",
+        "antibody"
+      ],
+      "pubmed_query": "(\"Chromatography, High Pressure Liquid\"[MeSH] OR \"Chromatography, Gel\"[MeSH] OR \"Chromatography, Hydrophobic Interaction\"[MeSH] OR \"Electrophoresis, Capillary\"[MeSH] OR SEC[tiab] OR \"CE-SDS\"[tiab] OR HIC[tiab] OR HPLC[tiab] OR \"size exclusion chromatography\"[tiab] OR \"hydrophobic interaction chromatography\"[tiab] OR \"capillary electrophoresis\"[tiab] OR \"capillary gel electrophoresis\"[tiab] OR \"high performance liquid chromatography\"[tiab]) AND (purity[tiab] OR content[tiab] OR quantitation[tiab] OR quantification[tiab] OR \"size variants\"[tiab] OR aggregates[tiab] OR fragments[tiab] OR impurities[tiab] OR excipients[tiab]) AND (protein[tiab] OR proteins[tiab] OR antibody[tiab] OR antibodies[tiab] OR monoclonal[tiab] OR \"mAb\"[tiab] OR therapeutic[tiab] OR biopharmaceutical[tiab] OR vaccine[tiab] OR \"monoclonal antibody\"[tiab] OR \"monoclonal antibodies\"[tiab])",
+      "plain_query": "SEC CE-SDS HIC HPLC purity content analysis protein size variants aggregates excipients"
+    },
+    {
+      "cluster": "免疫分析与酶学检测",
+      "mesh_terms": [
+        "Immunoglobulin G",
+        "Cysteine Endopeptidases",
+        "Bacterial Proteins",
+        "Enzyme-Linked Immunosorbent Assay",
+        "Endotoxins",
+        "Limulus Test",
+        "Drug Residues"
+      ],
+      "free_terms": [
+        "IdeS",
+        "Imlifidase",
+        "IgG endopeptidase",
+        "IgG-degrading enzyme",
+        "IgG-cleaving enzyme",
+        "immunoassay",
+        "ELISA",
+        "validation",
+        "method validation",
+        "endotoxin",
+        "LAL",
+        "Limulus amebocyte lysate",
+        "Protein A",
+        "residual protein",
+        "host cell protein"
+      ],
+      "pubmed_query": "((\"Immunoglobulin G\"[MeSH] AND (\"Cysteine Endopeptidases\"[MeSH] OR \"Bacterial Proteins\"[MeSH])) OR IdeS[tiab] OR Imlifidase[tiab] OR \"IgG endopeptidase\"[tiab] OR \"IgG-degrading enzyme\"[tiab] OR \"IgG-cleaving enzyme\"[tiab] OR \"immunoglobulin G-degrading enzyme\"[tiab]) OR ((\"Enzyme-Linked Immunosorbent Assay\"[MeSH] OR ELISA[tiab] OR immunoassay[tiab]) AND (validation[tiab] OR \"method validation\"[tiab] OR verification[tiab])) OR ((\"Endotoxins\"[MeSH] OR \"Limulus Test\"[MeSH] OR endotoxin[tiab] OR LAL[tiab] OR \"Limulus test\"[tiab] OR \"Limulus amebocyte lysate\"[tiab]) AND (assay[tiab] OR detection[tiab] OR test[tiab] OR turbidimetric[tiab] OR chromogenic[tiab])) OR ((\"Drug Residues\"[MeSH] OR \"Protein A\"[tiab] OR \"residual protein\"[tiab] OR \"host cell protein\"[tiab]) AND (detection[tiab] OR assay[tiab] OR ELISA[tiab] OR immunoassay[tiab]))",
+      "plain_query": "IdeS Imlifidase IgG-degrading enzyme immunoassay ELISA endotoxin LAL method validation residual protein detection"
+    }
+  ]
+}
