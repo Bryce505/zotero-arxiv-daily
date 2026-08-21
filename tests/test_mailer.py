@@ -182,3 +182,108 @@ def test_send_digest_ignores_blank_recipient_entries(monkeypatch):
     monkeypatch.setattr(smtplib, "SMTP", StubSMTP)
     send_digest(make_config(recipients=["a@example.org", "  ", ""]), "S", "<p>hi</p>", [])
     assert sent["to_addrs"] == ["a@example.org"]
+
+
+def test_a_comma_separated_string_is_accepted_as_the_recipient_list(monkeypatch):
+    """A GitHub secret holds a string, not a YAML list."""
+    sent = {}
+
+    class StubSMTP:
+        def __init__(self, server, port):
+            pass
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def send_message(self, msg, from_addr=None, to_addrs=None):
+            sent["to_addrs"] = to_addrs
+
+        def quit(self):
+            pass
+
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP", StubSMTP)
+    config = OmegaConf.create(
+        {
+            "email": {
+                "sender": "me@example.org",
+                "sender_password": "pw",
+                "smtp_server": "s",
+                "smtp_port": 587,
+                "recipients": "a@example.org, b@example.org;c@example.org",
+            }
+        }
+    )
+    send_digest(config, "S", "<p>hi</p>", [])
+    assert sent["to_addrs"] == ["a@example.org", "b@example.org", "c@example.org"]
+
+
+def test_recipients_fall_back_to_the_single_receiver(monkeypatch):
+    """An existing single-recipient setup keeps working untouched."""
+    sent = {}
+
+    class StubSMTP:
+        def __init__(self, server, port):
+            pass
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def send_message(self, msg, from_addr=None, to_addrs=None):
+            sent["to_addrs"] = to_addrs
+
+        def quit(self):
+            pass
+
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP", StubSMTP)
+    config = OmegaConf.create(
+        {
+            "email": {
+                "sender": "me@example.org",
+                "sender_password": "pw",
+                "smtp_server": "s",
+                "smtp_port": 587,
+                "recipients": None,
+                "receiver": "solo@example.org",
+            }
+        }
+    )
+    send_digest(config, "S", "<p>hi</p>", [])
+    assert sent["to_addrs"] == ["solo@example.org"]
+
+
+def test_the_configured_recipients_are_declared_in_base_config():
+    """send_digest reads email.recipients, so base.yaml must document it."""
+    from hydra import compose, initialize_config_dir
+    from hydra.core.global_hydra import GlobalHydra
+    from pathlib import Path
+
+    GlobalHydra.instance().clear()
+    config_dir = str(Path(__file__).resolve().parent.parent / "config")
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(
+            config_name="default",
+            overrides=[
+                "zotero.user_id=1",
+                "zotero.api_key=k",
+                "email.sender=a@b.c",
+                "email.receiver=a@b.c",
+                "email.smtp_server=s",
+                "email.smtp_port=465",
+                "email.sender_password=p",
+                "llm.api.key=k",
+                "llm.api.base_url=u",
+                "llm.generation_kwargs.model=m",
+                "executor.source=[arxiv]",
+            ],
+        )
+    assert "recipients" in cfg.email

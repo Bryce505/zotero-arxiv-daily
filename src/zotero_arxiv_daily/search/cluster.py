@@ -11,7 +11,7 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 import numpy as np
 from loguru import logger
@@ -106,6 +106,35 @@ def cluster_corpus(
     return _absorb_unassigned(clusters, len(corpus))
 
 
+def _to_cache(clusters: list[ThemeCluster], corpus: list[CorpusPaper]) -> list[dict]:
+    """Serialise membership by title, so it survives a corpus reordering."""
+    return [
+        {
+            "name": c.name,
+            "description": c.description,
+            "member_titles": [corpus[i].title for i in c.members if i < len(corpus)],
+        }
+        for c in clusters
+    ]
+
+
+def _from_cache(cached: list[dict], corpus: list[CorpusPaper]) -> list[ThemeCluster]:
+    """Resolve cached titles back to positions in *corpus* as fetched."""
+    index_of: dict[str, int] = {}
+    for i, paper in enumerate(corpus):
+        index_of.setdefault(paper.title, i)
+
+    clusters = []
+    for raw in cached:
+        members = [index_of[t] for t in raw["member_titles"] if t in index_of]
+        clusters.append(
+            ThemeCluster(name=raw["name"], description=raw.get("description", ""), members=members)
+        )
+    if not clusters:
+        raise ValueError("the cache held no clusters")
+    return _absorb_unassigned(clusters, len(corpus))
+
+
 def load_or_build_clusters(
     path: str,
     corpus: list[CorpusPaper],
@@ -121,7 +150,7 @@ def load_or_build_clusters(
                 cached = json.load(handle)
             if cached.get("fingerprint") == fingerprint:
                 logger.info(f"Reusing cached theme clusters from {path}")
-                return [ThemeCluster(**c) for c in cached["clusters"]]
+                return _from_cache(cached["clusters"], corpus)
         except Exception as exc:  # noqa: BLE001 - a corrupt cache must not break the run
             logger.warning(f"Ignoring unreadable cluster cache {path}: {exc}")
 
@@ -129,7 +158,7 @@ def load_or_build_clusters(
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(
-            {"fingerprint": fingerprint, "clusters": [asdict(c) for c in clusters]},
+            {"fingerprint": fingerprint, "clusters": _to_cache(clusters, corpus)},
             handle,
             ensure_ascii=False,
             indent=2,

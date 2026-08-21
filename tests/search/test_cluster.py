@@ -155,3 +155,48 @@ def test_assignment_skips_empty_clusters():
     ]
     assign_clusters(candidates, np.array([[0.5]]), clusters)
     assert candidates[0].cluster == "real"
+
+
+def test_cached_membership_follows_the_papers_not_their_positions(tmp_path):
+    """Zotero returns items newest-modified first, so positions move.
+
+    The fingerprint is deliberately order-insensitive, so a reordered corpus
+    still hits the cache. If membership were stored positionally, every
+    candidate would then be routed to the wrong theme with no error.
+    """
+    path = str(tmp_path / "clusters.json")
+    corpus = make_corpus(4)
+    payload = json.dumps(
+        {
+            "clusters": [
+                {"name": "front", "description": "d", "members": [0, 1]},
+                {"name": "back", "description": "d", "members": [2, 3]},
+            ]
+        }
+    )
+    load_or_build_clusters(path, corpus, stub_client(payload), LLM_PARAMS)
+
+    def explode(**kw):
+        raise AssertionError("the reordered corpus must still hit the cache")
+
+    cold = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=explode)))
+    reordered = list(reversed(corpus))  # Paper 3, Paper 2, Paper 1, Paper 0
+    clusters = load_or_build_clusters(path, reordered, cold, LLM_PARAMS)
+
+    by_name = {c.name: c for c in clusters}
+    front_titles = {reordered[i].title for i in by_name["front"].members}
+    back_titles = {reordered[i].title for i in by_name["back"].members}
+    assert front_titles == {"Paper 0", "Paper 1"}
+    assert back_titles == {"Paper 2", "Paper 3"}
+
+
+def test_a_paper_added_since_the_cache_was_built_is_still_clustered(tmp_path):
+    path = str(tmp_path / "clusters.json")
+    payload = json.dumps({"clusters": [{"name": "only", "description": "d", "members": [0, 1, 2, 3]}]})
+    load_or_build_clusters(path, make_corpus(4), stub_client(payload), LLM_PARAMS)
+
+    # A fifth paper changes the fingerprint, so the cache is rebuilt rather
+    # than silently leaving the newcomer unassigned.
+    rebuilt = load_or_build_clusters(path, make_corpus(5), stub_client(payload), LLM_PARAMS)
+    covered = {i for c in rebuilt for i in c.members}
+    assert covered == {0, 1, 2, 3, 4}

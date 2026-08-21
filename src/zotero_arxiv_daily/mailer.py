@@ -7,6 +7,7 @@ the repository archive.
 """
 
 import os
+import re
 import smtplib
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -14,6 +15,30 @@ from email.message import EmailMessage
 from loguru import logger
 
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+_ADDRESS_SEPARATOR_RE = re.compile(r"[,;\s]+")
+
+
+def resolve_recipients(email_config) -> list[str]:
+    """Normalise the configured recipients into a list of addresses.
+
+    Accepts a YAML list or a single delimited string, because a GitHub secret
+    can only hold a string.  Falls back to the single ``receiver`` so an
+    existing daily-digest configuration keeps working untouched.
+    """
+    raw = email_config.get("recipients")
+    if isinstance(raw, str):
+        candidates = _ADDRESS_SEPARATOR_RE.split(raw)
+    elif raw:
+        candidates = [str(r) for r in raw]
+    else:
+        candidates = []
+
+    recipients = [c.strip() for c in candidates if c and c.strip()]
+    if not recipients:
+        fallback = email_config.get("receiver")
+        if fallback:
+            recipients = [str(fallback).strip()]
+    return recipients
 
 
 @dataclass
@@ -89,7 +114,7 @@ def build_message(
 def send_digest(config, subject: str, html: str, attachments: list[Attachment]) -> None:
     """Send the digest over SMTP, preferring STARTTLS and falling back to SSL."""
     settings = config.email
-    recipients = [str(r).strip() for r in (settings.get("recipients") or []) if str(r).strip()]
+    recipients = resolve_recipients(settings)
     if not recipients:
         raise ValueError("email.recipients is empty: no recipients to send the digest to")
 

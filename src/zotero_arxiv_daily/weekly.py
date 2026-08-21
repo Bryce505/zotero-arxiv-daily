@@ -15,21 +15,21 @@ from loguru import logger
 from omegaconf import DictConfig
 from openai import OpenAI
 
-from .backfill import backfill_papers
-from .dedup import dedup_papers, drop_seen, load_seen, normalize_doi, save_seen
-from .executor import Executor, normalize_path_patterns
-from .extract import extract_all, load_field_specs
-from .fulltext.resolver import download_fulltext
-from .mailer import select_attachments, send_digest
-from .publish import git_commit_paths, write_text
-from .quota import allocate_quota, take_by_quota
-from .report import build_digest, render_email_html, render_markdown, render_web_html
-from .reranker import get_reranker_cls
-from .reranker.base import time_decay_weights
-from .retriever import get_query_retriever_cls
-from .search.cluster import assign_clusters, load_or_build_clusters
-from .search.profile import load_or_build_profiles
-from .weeknum import library_dir, report_paths, week_label, week_window
+from zotero_arxiv_daily.backfill import backfill_papers
+from zotero_arxiv_daily.dedup import dedup_papers, drop_seen, load_seen, normalize_doi, save_seen
+from zotero_arxiv_daily.executor import Executor, normalize_path_patterns
+from zotero_arxiv_daily.extract import extract_all, load_field_specs
+from zotero_arxiv_daily.fulltext.resolver import download_fulltext
+from zotero_arxiv_daily.mailer import select_attachments, send_digest
+from zotero_arxiv_daily.publish import git_commit_paths, write_text
+from zotero_arxiv_daily.quota import allocate_quota, take_by_quota
+from zotero_arxiv_daily.report import build_digest, render_email_html, render_markdown, render_web_html
+from zotero_arxiv_daily.reranker import get_reranker_cls
+from zotero_arxiv_daily.reranker.base import time_decay_weights
+from zotero_arxiv_daily.retriever import get_query_retriever_cls
+from zotero_arxiv_daily.search.cluster import assign_clusters, load_or_build_clusters
+from zotero_arxiv_daily.search.profile import load_or_build_profiles
+from zotero_arxiv_daily.weeknum import library_dir, report_paths, week_label, week_window
 
 
 class WeeklyExecutor(Executor):
