@@ -351,3 +351,15 @@ def test_backfilled_papers_can_be_attached_too():
     classic.is_backfill, classic.cited_by_count = True, 900
     digest = build_digest([fresh], [classic], date(2026, 8, 21), top_n=1)
     assert attachment_candidates(digest, 5) == ["/tmp/fresh.pdf", "/tmp/classic.pdf"]
+
+
+def test_the_caches_live_under_the_output_root(weekly_config, stubbed, tmp_path):
+    """An unrooted cache path makes git add fail and loses the whole archive."""
+    weekly_config.search.cluster_cache = "state/theme_clusters.json"
+    weekly_config.search.profile_cache = "state/query_profiles.json"
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert (tmp_path / "state" / "theme_clusters.json").exists()
+    assert (tmp_path / "state" / "query_profiles.json").exists()
+    staged = stubbed["committed"][0]
+    assert "state/theme_clusters.json" in staged
+    assert "state/query_profiles.json" in staged

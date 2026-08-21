@@ -11,6 +11,7 @@ import re
 from datetime import date, datetime, timedelta
 from html import escape
 
+import dotenv
 import hydra
 from loguru import logger
 from omegaconf import DictConfig
@@ -117,6 +118,9 @@ class MonthlyExecutor:
         )
         logger.info(f"Monthly synthesis {label} delivered, archived at {path}")
         return path
+
+
+dotenv.load_dotenv()
 
 
 @hydra.main(version_base=None, config_path="../../config", config_name="default")

@@ -26,3 +26,10 @@ def test_entrypoint_runs_as_a_script(script):
     assert "ImportError" not in combined, combined
     assert "attempted relative import" not in combined, combined
     assert result.returncode == 0, combined
+
+
+@pytest.mark.parametrize("script", ["main.py", "weekly.py", "monthly.py"])
+def test_entrypoint_loads_a_dotenv_file(script):
+    """The documented local workflow puts secrets in .env."""
+    source = (REPO / "src" / "zotero_arxiv_daily" / script).read_text(encoding="utf-8")
+    assert "load_dotenv()" in source, f"{script} would not see a local .env"

@@ -94,3 +94,19 @@ def test_take_by_quota_ignores_clusters_with_no_quota():
     ranked = [make_paper("a1", "a", 9.0), make_paper("z1", "z", 8.0)]
     taken = take_by_quota(ranked, {"a": 1})
     assert [p.title for p in taken] == ["a1"]
+
+
+def test_a_tight_total_still_hands_out_every_slot():
+    """total < min*clusters must not silently ship a shorter digest."""
+    quota = allocate_quota({f"c{i}": 10 for i in range(5)}, total=8, min_per_cluster=2)
+    assert sum(quota.values()) == 8
+
+
+def test_a_tight_total_spreads_as_evenly_as_it_can():
+    quota = allocate_quota({f"c{i}": 10 for i in range(5)}, total=8, min_per_cluster=2)
+    assert sorted(quota.values()) == [1, 1, 2, 2, 2]
+
+
+def test_more_clusters_than_slots_still_sums_to_the_total():
+    quota = allocate_quota({f"c{i}": 10 for i in range(9)}, total=4, min_per_cluster=3)
+    assert sum(quota.values()) == 4

@@ -15,6 +15,7 @@ from email.message import EmailMessage
 from loguru import logger
 
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+SMTP_TIMEOUT_SECONDS = 60
 _ADDRESS_SEPARATOR_RE = re.compile(r"[,;\s]+")
 
 
@@ -135,12 +136,20 @@ def send_digest(config, subject: str, html: str, attachments: list[Attachment]) 
     sender = settings.sender
     msg = build_message(subject, html, sender, recipients, attachments)
 
+    # Without a timeout an SSL-only port (465 is the shipped default) leaves
+    # the plaintext greeting read blocking forever instead of falling through.
+    server = None
     try:
-        server = smtplib.SMTP(settings.smtp_server, settings.smtp_port)
+        server = smtplib.SMTP(settings.smtp_server, settings.smtp_port, timeout=SMTP_TIMEOUT_SECONDS)
         server.starttls()
     except Exception as exc:  # noqa: BLE001 - many providers are SSL-only on 465
         logger.debug(f"STARTTLS unavailable ({exc}); falling back to SSL")
-        server = smtplib.SMTP_SSL(settings.smtp_server, settings.smtp_port)
+        if server is not None:
+            try:
+                server.close()
+            except Exception:  # noqa: BLE001 - the socket is already unusable
+                pass
+        server = smtplib.SMTP_SSL(settings.smtp_server, settings.smtp_port, timeout=SMTP_TIMEOUT_SECONDS)
 
     server.login(sender, settings.sender_password)
     server.send_message(msg, from_addr=sender, to_addrs=recipients)

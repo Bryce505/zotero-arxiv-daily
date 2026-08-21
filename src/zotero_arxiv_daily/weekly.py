@@ -10,6 +10,7 @@ and send.
 import os
 from datetime import date, datetime
 
+import dotenv
 import hydra
 import numpy as np
 from loguru import logger
@@ -116,20 +117,23 @@ class WeeklyExecutor(Executor):
         start, end = week_window(anchor)
         logger.info(f"Building digest {label} covering {start} to {end}")
 
+        root = str(self.config.report.output_dir)
         corpus = self.filter_corpus(self.fetch_zotero_corpus())
         if not corpus:
             logger.error(f"No Zotero papers matched. Check your settings:\n{self.config.zotero}")
             return None
 
+        cluster_cache_rel = str(self.config.search.cluster_cache)
+        profile_cache_rel = str(self.config.search.profile_cache)
         clusters = load_or_build_clusters(
-            self.config.search.cluster_cache,
+            os.path.join(root, cluster_cache_rel),
             corpus,
             self.openai_client,
             self.config.llm,
             int(self.config.search.n_clusters),
         )
         profiles = load_or_build_profiles(
-            self.config.search.profile_cache,
+            os.path.join(root, profile_cache_rel),
             clusters,
             corpus,
             self.openai_client,
@@ -139,7 +143,6 @@ class WeeklyExecutor(Executor):
         # Anything already in the library, or already delivered in an earlier
         # week, is noise rather than a recommendation (spec 8.5).
         already_held = corpus_doi_set(corpus)
-        root = str(self.config.report.output_dir)
         seen_rel = str(self.config.search.seen_state)
         seen = load_seen(os.path.join(root, seen_rel))
         exclude = seen | already_held
@@ -199,8 +202,8 @@ class WeeklyExecutor(Executor):
             md_rel,
             html_rel,
             seen_rel,
-            str(self.config.search.cluster_cache),
-            str(self.config.search.profile_cache),
+            cluster_cache_rel,
+            profile_cache_rel,
         ]
         if any(p.pdf_path for p in delivered) and self.config.git.get("include_pdfs", True):
             wanted.append(pdf_rel)
@@ -222,6 +225,9 @@ class WeeklyExecutor(Executor):
         )
         logger.info(f"Digest {label} delivered: {digest.total} papers, archived at {md_path}")
         return digest
+
+
+dotenv.load_dotenv()
 
 
 @hydra.main(version_base=None, config_path="../../config", config_name="default")

@@ -118,3 +118,31 @@ def test_corpus_doi_set_collects_normalised_dois_from_corpus_papers():
         CorpusPaper(title="c", abstract="x", added_date=datetime(2026, 1, 1), paths=[], doi="not-a-doi"),
     ]
     assert corpus_doi_set(corpus) == {"10.1016/a"}
+
+
+def test_dedup_merges_richer_fields_from_the_discarded_duplicate():
+    """PubMed carries no OA data; Europe PMC does. Losing it wastes a PDF."""
+    from zotero_arxiv_daily.protocol import Paper
+
+    first = Paper(source="pubmed", title="T", authors=[], abstract="a", url="u",
+                  doi="10.1016/x", journal="J Chromatogr A")
+    second = Paper(source="europepmc", title="T", authors=[], abstract="a", url="u2",
+                   doi="10.1016/X", pdf_url="https://oa.example.org/p.pdf", oa_status="open")
+    merged = dedup_papers([first, second])
+    assert len(merged) == 1
+    assert merged[0].source == "pubmed"          # first wins the identity
+    assert merged[0].journal == "J Chromatogr A"  # and keeps its own data
+    assert merged[0].pdf_url == "https://oa.example.org/p.pdf"
+    assert merged[0].oa_status == "open"
+
+
+def test_dedup_does_not_let_a_duplicate_overwrite_existing_values():
+    from zotero_arxiv_daily.protocol import Paper
+
+    first = Paper(source="europepmc", title="T", authors=[], abstract="a", url="u",
+                  doi="10.1016/x", pdf_url="https://first.example.org/p.pdf", oa_status="open")
+    second = Paper(source="openalex", title="T", authors=[], abstract="a", url="u2",
+                   doi="10.1016/x", pdf_url="https://second.example.org/p.pdf", cited_by_count=42)
+    merged = dedup_papers([first, second])
+    assert merged[0].pdf_url == "https://first.example.org/p.pdf"
+    assert merged[0].cited_by_count == 42  # only the gaps are filled

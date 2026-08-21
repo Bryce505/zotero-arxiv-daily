@@ -41,13 +41,9 @@ def allocate_quota(
     names = sorted(cluster_sizes)
     weights = {name: math.sqrt(max(cluster_sizes[name], 0)) or 1.0 for name in names}
 
-    # Not enough slots to honour the floor everywhere: hand out one each,
-    # best-weighted first, rather than starving everyone to zero.
-    if total < min_per_cluster * len(names):
-        quota = {name: 0 for name in names}
-        for name in sorted(names, key=lambda n: (-weights[n], n))[:total]:
-            quota[name] = 1
-        return quota
+    # Not enough slots to honour the requested floor everywhere: lower it to
+    # what the total can actually pay for, rather than shipping a short digest.
+    min_per_cluster = min(min_per_cluster, total // len(names))
 
     quota = _proportional(names, weights, total)
 

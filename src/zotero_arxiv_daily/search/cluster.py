@@ -79,6 +79,33 @@ def _absorb_unassigned(clusters: list[ThemeCluster], corpus_size: int) -> list[T
     return clusters
 
 
+def _single_cluster(corpus: list[CorpusPaper]) -> list[ThemeCluster]:
+    return [
+        ThemeCluster(name="全部", description="未能聚类，全部归为一簇", members=list(range(len(corpus))))
+    ]
+
+
+def _cluster_corpus_strict(
+    corpus: list[CorpusPaper],
+    client,
+    llm_params: dict,
+    n_clusters: int,
+) -> list[ThemeCluster]:
+    """Group *corpus* into themes, raising if the model cannot be parsed."""
+    response = client.chat.completions.create(
+        messages=[
+            {
+                "role": "system",
+                "content": "你是一位生物制药 CMC 分析领域的文献主题归纳专家，只输出 JSON。",
+            },
+            {"role": "user", "content": _build_prompt(corpus, n_clusters)},
+        ],
+        **llm_params.get("generation_kwargs", {}),
+    )
+    clusters = _parse_clusters(response.choices[0].message.content, len(corpus))
+    return _absorb_unassigned(clusters, len(corpus))
+
+
 def cluster_corpus(
     corpus: list[CorpusPaper],
     client,
@@ -87,23 +114,10 @@ def cluster_corpus(
 ) -> list[ThemeCluster]:
     """Ask the LLM to group *corpus* into themes; never raises."""
     try:
-        response = client.chat.completions.create(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "你是一位生物制药 CMC 分析领域的文献主题归纳专家，只输出 JSON。",
-                },
-                {"role": "user", "content": _build_prompt(corpus, n_clusters)},
-            ],
-            **llm_params.get("generation_kwargs", {}),
-        )
-        clusters = _parse_clusters(response.choices[0].message.content, len(corpus))
+        return _cluster_corpus_strict(corpus, client, llm_params, n_clusters)
     except Exception as exc:  # noqa: BLE001 - clustering must never break the run
         logger.warning(f"Corpus clustering failed ({exc}); falling back to a single cluster")
-        return [
-            ThemeCluster(name="全部", description="未能聚类，全部归为一簇", members=list(range(len(corpus))))
-        ]
-    return _absorb_unassigned(clusters, len(corpus))
+        return _single_cluster(corpus)
 
 
 def _to_cache(clusters: list[ThemeCluster], corpus: list[CorpusPaper]) -> list[dict]:
@@ -154,7 +168,15 @@ def load_or_build_clusters(
         except Exception as exc:  # noqa: BLE001 - a corrupt cache must not break the run
             logger.warning(f"Ignoring unreadable cluster cache {path}: {exc}")
 
-    clusters = cluster_corpus(corpus, client, llm_params, n_clusters)
+    try:
+        clusters = _cluster_corpus_strict(corpus, client, llm_params, n_clusters)
+    except Exception as exc:  # noqa: BLE001 - degrade for this run only
+        # Never cache the fallback: the cache is committed and keyed only on
+        # the corpus, so one transient API error would collapse the digest to
+        # a single theme for good.
+        logger.warning(f"Corpus clustering failed ({exc}); using a single cluster for this run only")
+        return _single_cluster(corpus)
+
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(

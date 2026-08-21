@@ -33,27 +33,47 @@ def title_key(title: str) -> str:
     return _WHITESPACE_RE.sub(" ", cleaned).strip()
 
 
+# Fields one source commonly has and another lacks: PubMed carries no
+# open-access data, OpenAlex carries no PMID-based link, and so on.
+_MERGEABLE_FIELDS = ("pdf_url", "journal", "pub_date", "cited_by_count", "full_text")
+
+
+def _merge_into(kept: Paper, duplicate: Paper) -> None:
+    """Fill gaps on *kept* from *duplicate*, never overwriting known values."""
+    for field in _MERGEABLE_FIELDS:
+        if getattr(kept, field, None) is None and getattr(duplicate, field, None) is not None:
+            setattr(kept, field, getattr(duplicate, field))
+    if kept.oa_status == "unknown" and duplicate.oa_status != "unknown":
+        kept.oa_status = duplicate.oa_status
+
+
 def dedup_papers(papers: list[Paper]) -> list[Paper]:
     """Collapse duplicates, keeping the first occurrence of each paper.
 
     Papers carrying a DOI are keyed on it; only DOI-less papers fall back to
     their title, so two genuinely different papers that share a title are
-    never merged.
+    never merged.  The first occurrence keeps its identity but absorbs any
+    field the later duplicate knew and it did not — PubMed has no
+    open-access data, and losing Europe PMC's would waste a retrievable PDF.
     """
-    seen_dois: set[str] = set()
-    seen_titles: set[str] = set()
+    by_doi: dict[str, Paper] = {}
+    by_title: dict[str, Paper] = {}
     kept: list[Paper] = []
     for paper in papers:
         doi = normalize_doi(paper.doi)
         if doi is not None:
-            if doi in seen_dois:
+            existing = by_doi.get(doi)
+            if existing is not None:
+                _merge_into(existing, paper)
                 continue
-            seen_dois.add(doi)
+            by_doi[doi] = paper
         else:
             key = title_key(paper.title)
-            if key in seen_titles:
+            existing = by_title.get(key)
+            if existing is not None:
+                _merge_into(existing, paper)
                 continue
-            seen_titles.add(key)
+            by_title[key] = paper
         kept.append(paper)
     return kept
 

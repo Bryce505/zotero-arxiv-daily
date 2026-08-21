@@ -200,3 +200,27 @@ def test_a_paper_added_since_the_cache_was_built_is_still_clustered(tmp_path):
     rebuilt = load_or_build_clusters(path, make_corpus(5), stub_client(payload), LLM_PARAMS)
     covered = {i for c in rebuilt for i in c.members}
     assert covered == {0, 1, 2, 3, 4}
+
+
+def test_a_failed_clustering_is_not_cached(tmp_path):
+    """One transient API error must not permanently collapse the digest.
+
+    The cache is committed to git and keyed only on the corpus, so a cached
+    fallback would survive every later run.
+    """
+    path = str(tmp_path / "clusters.json")
+    corpus = make_corpus()
+
+    def boom(**kw):
+        raise RuntimeError("rate limited")
+
+    failing = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=boom)))
+    fallback = load_or_build_clusters(path, corpus, failing, LLM_PARAMS)
+    assert len(fallback) == 1  # degraded, as designed
+
+    import os
+
+    assert not os.path.exists(path), "a degraded result must not be cached"
+
+    recovered = load_or_build_clusters(path, corpus, stub_client(VALID_PAYLOAD), LLM_PARAMS)
+    assert [c.name for c in recovered] == ["电荷异质性", "宿主细胞蛋白"]

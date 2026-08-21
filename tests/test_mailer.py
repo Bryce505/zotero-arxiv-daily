@@ -98,7 +98,7 @@ def test_send_digest_delivers_to_every_recipient(monkeypatch):
     sent = {}
 
     class StubSMTP:
-        def __init__(self, server, port):
+        def __init__(self, server, port, timeout=None):
             sent["server"] = (server, port)
 
         def starttls(self):
@@ -125,14 +125,14 @@ def test_send_digest_falls_back_to_ssl_when_starttls_is_unavailable(monkeypatch)
     used = {}
 
     class NoTLS:
-        def __init__(self, server, port):
+        def __init__(self, server, port, timeout=None):
             pass
 
         def starttls(self):
             raise OSError("STARTTLS not offered")
 
     class StubSSL:
-        def __init__(self, server, port):
+        def __init__(self, server, port, timeout=None):
             used["ssl"] = True
 
         def login(self, user, password):
@@ -162,7 +162,7 @@ def test_send_digest_ignores_blank_recipient_entries(monkeypatch):
     sent = {}
 
     class StubSMTP:
-        def __init__(self, server, port):
+        def __init__(self, server, port, timeout=None):
             pass
 
         def starttls(self):
@@ -189,7 +189,7 @@ def test_a_comma_separated_string_is_accepted_as_the_recipient_list(monkeypatch)
     sent = {}
 
     class StubSMTP:
-        def __init__(self, server, port):
+        def __init__(self, server, port, timeout=None):
             pass
 
         def starttls(self):
@@ -227,7 +227,7 @@ def test_recipients_fall_back_to_the_single_receiver(monkeypatch):
     sent = {}
 
     class StubSMTP:
-        def __init__(self, server, port):
+        def __init__(self, server, port, timeout=None):
             pass
 
         def starttls(self):
@@ -287,3 +287,65 @@ def test_the_configured_recipients_are_declared_in_base_config():
             ],
         )
     assert "recipients" in cfg.email
+
+
+def test_the_smtp_connection_carries_a_timeout(monkeypatch):
+    """Port 465 is SSL-only; an untimed SMTP greeting read hangs forever."""
+    seen = {}
+
+    class StubSMTP:
+        def __init__(self, server, port, timeout=None):
+            seen["timeout"] = timeout
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def send_message(self, msg, from_addr=None, to_addrs=None):
+            pass
+
+        def quit(self):
+            pass
+
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP", StubSMTP)
+    send_digest(make_config(), "S", "<p>hi</p>", [])
+    assert seen["timeout"] is not None and seen["timeout"] > 0
+
+
+def test_a_failed_starttls_connection_is_closed_before_falling_back(monkeypatch):
+    """Leaving the half-open socket behind leaks a connection per run."""
+    closed = {"value": False}
+
+    class NoTLS:
+        def __init__(self, server, port, timeout=None):
+            pass
+
+        def starttls(self):
+            raise OSError("STARTTLS not offered")
+
+        def close(self):
+            closed["value"] = True
+
+    class StubSSL:
+        def __init__(self, server, port, timeout=None):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def send_message(self, msg, from_addr=None, to_addrs=None):
+            pass
+
+        def quit(self):
+            pass
+
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP", NoTLS)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", StubSSL)
+    send_digest(make_config(), "S", "<p>hi</p>", [])
+    assert closed["value"] is True

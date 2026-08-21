@@ -113,3 +113,17 @@ def test_one_profile_is_built_per_cluster(tmp_path):
     ]
     profiles = load_or_build_profiles(path, clusters, make_corpus(), stub_client(PAYLOAD), LLM_PARAMS)
     assert [p.cluster for p in profiles] == ["a", "b"]
+
+
+def test_a_failed_distillation_is_not_cached(tmp_path):
+    """A cached empty pubmed_query would silently disable PubMed for that theme."""
+    import os
+
+    path = str(tmp_path / "profiles.json")
+    clusters = [ThemeCluster(name="a", description="d", members=[0])]
+    degraded = load_or_build_profiles(path, clusters, make_corpus(), stub_client("garbage"), LLM_PARAMS)
+    assert degraded[0].pubmed_query == ""
+    assert not os.path.exists(path), "a degraded result must not be cached"
+
+    recovered = load_or_build_profiles(path, clusters, make_corpus(), stub_client(PAYLOAD), LLM_PARAMS)
+    assert "[MeSH]" in recovered[0].pubmed_query

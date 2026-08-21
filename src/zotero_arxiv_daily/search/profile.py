@@ -98,6 +98,12 @@ def load_or_build_profiles(
             logger.warning(f"Ignoring unreadable profile cache {path}: {exc}")
 
     profiles = [distill_profile(c, corpus, client, llm_params) for c in clusters]
+    if any(not p.pubmed_query for p in profiles):
+        # A cached empty pubmed_query would silently disable PubMed for that
+        # theme forever, and the cache is committed. Degrade for this run only.
+        logger.warning("At least one query profile degraded; not caching this round")
+        return profiles
+
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(
