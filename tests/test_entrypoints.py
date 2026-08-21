@@ -14,7 +14,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 
 
-@pytest.mark.parametrize("script", ["main.py", "weekly.py", "monthly.py"])
+@pytest.mark.parametrize("script", ["main.py", "weekly.py", "monthly.py", "preflight.py"])
 def test_entrypoint_runs_as_a_script(script):
     result = subprocess.run(
         [sys.executable, str(REPO / "src" / "zotero_arxiv_daily" / script), "--help"],
@@ -28,7 +28,7 @@ def test_entrypoint_runs_as_a_script(script):
     assert result.returncode == 0, combined
 
 
-@pytest.mark.parametrize("script", ["main.py", "weekly.py", "monthly.py"])
+@pytest.mark.parametrize("script", ["main.py", "weekly.py", "monthly.py", "preflight.py"])
 def test_entrypoint_loads_a_dotenv_file(script):
     """The documented local workflow puts secrets in .env."""
     source = (REPO / "src" / "zotero_arxiv_daily" / script).read_text(encoding="utf-8")

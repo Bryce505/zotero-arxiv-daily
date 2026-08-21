@@ -81,13 +81,44 @@ zhang@corp.com, li@corp.com, wang@corp.com
 
 ---
 
-## 3. 首跑
+## 3. 先跑预检（约 1 分钟）
 
-新建的定时 workflow 在 fork 仓库里会以 `disabled_fork` 状态诞生，**必须手动启用一次**：
+**别直接跑周报。** 周报要先做完 Zotero、聚类、四源检索、全文抓取、抽取，二十多分钟之后才碰 SMTP——一个密码错了，你要等到最后一步才知道。
 
-1. Actions 标签 → 左侧找到 **CMC literature weekly digest**
-2. 若顶部有 "This workflow was disabled..." 横幅 → 点 **Enable workflow**
-3. 点 **Run workflow** 手动触发
+预检把每个边界都便宜地探一遍：**不发邮件、不写文件、不提交**。
+
+1. Actions → **CMC weekly preflight** → 若有 "This workflow was disabled" 横幅先点 **Enable workflow**
+2. **Run workflow**
+
+输出长这样：
+
+```
+Preflight
+────────────────────────────────────────────────────────────
+[ OK ] zotero       111 of 112 papers matched include_path
+[WARN] llm          deepseek-v4-flash answered, but llm.language is English: ...
+[ OK ] pubmed       2 probe results
+[ OK ] europepmc    2 probe results
+[WARN] crossref     reachable but the probe query returned nothing
+[ OK ] openalex     2 probe results
+[FAIL] recipients   no recipients resolved; set the RECIPIENTS secret (comma separated)
+[ OK ] smtp         smtp.gmail.com accepted the login
+────────────────────────────────────────────────────────────
+FAIL — 1 check(s) must be fixed before the weekly run
+```
+
+有 `FAIL` 就不要跑周报，先按提示修。`WARN` 不阻塞运行，但值得看一眼——比如上面那条 `llm` 警告，意味着你的周报会全出英文。
+
+**改了任何 secret 或 `CUSTOM_CONFIG` 之后，重跑一次预检**，比跑一次完整周报便宜得多。
+
+---
+
+## 4. 跑周报
+
+预检全绿之后：
+
+1. Actions → **CMC literature weekly digest** → 若被禁用先 **Enable workflow**（fork 仓库里新建的定时任务默认是 `disabled_fork`）
+2. **Run workflow** 手动触发一次
 
 首跑会比之后每周都慢，因为三个缓存都是冷的：主题聚类、检索式蒸馏、语料向量。第二周起这三项都会命中缓存。
 
@@ -108,9 +139,9 @@ Digest sent to N recipients with M attachments
 
 ---
 
-## 4. 已知限制
+## 5. 已知限制
 
-**没有真实数据跑过。** 全部 370 条测试用的都是桩数据。第一次真跑一定会暴露我预料不到的东西——那是正常的，不是失败。
+**没有真实数据跑过。** 全部 399 条测试用的都是桩数据。预检（§3）能在真跑前查出配置与连通性问题，但查不出「推荐质量好不好」。第一次真跑一定会暴露我预料不到的东西——那是正常的，不是失败。
 
 **语料超过约 400 篇时聚类会退化。** 现在的做法是把整个文献库标题塞进一个 prompt 并要求返回每篇的归属。超过 300 篇会自动改为采样，未采样的篇目全部并入最大簇——语义上很粗糙。你现在 112 篇，按每年增长 100 篇算，大约三年后需要换一套归属策略（用 embedding 相似度而非 LLM 直接分配）。届时日志里会有明确告警。
 
@@ -133,7 +164,7 @@ reranker:
 
 ---
 
-## 5. 产物落在哪
+## 6. 产物落在哪
 
 ```
 reports/2026/2026-08-W3.md      周报 markdown（归档）
@@ -151,7 +182,7 @@ state/corpus_vectors.npz        语料向量缓存
 
 ---
 
-## 6. 月度综述（可选）
+## 7. 月度综述（可选）
 
 `monthly.yml` 每月 1 号 21:00（北京时间）跑一次，读当月所有周报，产出跨篇归纳。它是独立 workflow，**挂了不影响周报**。同样需要手动启用一次。
 
