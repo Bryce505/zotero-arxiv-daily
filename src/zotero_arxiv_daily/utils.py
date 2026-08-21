@@ -3,6 +3,9 @@ import re
 import glob
 import math
 import smtplib
+from time import sleep
+
+import requests
 from collections import Counter
 from email.header import Header
 from email.mime.text import MIMEText
@@ -169,3 +172,32 @@ def send_email(config:DictConfig, html:str):
     server.login(sender, password)
     server.sendmail(sender, [receiver], msg.as_string())
     server.quit()
+
+
+def http_get_with_retry(
+    url: str,
+    *,
+    params: dict | None = None,
+    headers: dict | None = None,
+    retries: int = 4,
+    backoff: float = 2.0,
+    timeout: int = 30,
+):
+    """GET with exponential backoff.
+
+    Every journal source here is a free public API with rate limits and the
+    occasional 5xx; a single failed request must never take down the weekly
+    run, so callers see an exception only after the last attempt.
+    """
+    delay = backoff
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            return response
+        except Exception as exc:  # noqa: BLE001 - retried below, re-raised on the last attempt
+            if attempt == retries - 1:
+                raise
+            logger.warning(f"GET {url} failed ({exc}); retrying in {delay:.0f}s")
+            sleep(delay)
+            delay *= 2
