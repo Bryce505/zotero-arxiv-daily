@@ -55,7 +55,7 @@ def test_select_attachments_stops_at_the_size_ceiling(tmp_path):
     paths = []
     for i in range(4):
         path = tmp_path / f"{i}.pdf"
-        path.write_bytes(b"x" * 1000)
+        path.write_bytes(b"x" * 900)  # 1200 bytes once base64-encoded
         paths.append(str(path))
     assert len(select_attachments(paths, max_total_bytes=2500)) == 2
 
@@ -349,3 +349,17 @@ def test_a_failed_starttls_connection_is_closed_before_falling_back(monkeypatch)
     monkeypatch.setattr(smtplib, "SMTP_SSL", StubSSL)
     send_digest(make_config(), "S", "<p>hi</p>", [])
     assert closed["value"] is True
+
+
+def test_the_attachment_ceiling_accounts_for_base64_inflation(tmp_path):
+    """SMTP limits apply to the encoded message, which is ~4/3 of the raw bytes."""
+    path = tmp_path / "big.pdf"
+    path.write_bytes(b"x" * 900)
+    # 900 raw bytes encode to ~1200; a 1000-byte ceiling must reject it.
+    assert select_attachments([str(path)], max_total_bytes=1000) == []
+
+
+def test_an_attachment_that_still_fits_once_encoded_is_kept(tmp_path):
+    path = tmp_path / "ok.pdf"
+    path.write_bytes(b"x" * 600)
+    assert [a.filename for a in select_attachments([str(path)], max_total_bytes=1000)] == ["ok.pdf"]

@@ -49,7 +49,7 @@ def sample_digest():
 def test_digest_carries_the_week_label_and_window():
     digest = sample_digest()
     assert digest.label == "2026-08-W3"
-    assert digest.start == date(2026, 8, 15)
+    assert digest.start == date(2026, 8, 14)  # windows overlap by a day
     assert digest.end == date(2026, 8, 21)
 
 
@@ -81,7 +81,7 @@ def test_closed_access_papers_are_listed_for_manual_retrieval():
 def test_markdown_contains_the_label_window_and_every_paper():
     text = render_markdown(sample_digest(), FIELDS)
     assert "2026-08-W3" in text
-    assert "2026-08-15" in text and "2026-08-21" in text
+    assert "2026-08-14" in text and "2026-08-21" in text
     for title in ("alpha", "beta", "gamma", "classic"):
         assert title in text
 
@@ -156,3 +156,22 @@ def test_an_empty_digest_still_renders():
     assert "2026-08-W3" in render_markdown(digest, FIELDS)
     assert "2026-08-W3" in render_email_html(digest, FIELDS)
     assert "2026-08-W3" in render_web_html(digest, FIELDS)
+
+
+def test_paywalled_backfill_is_listed_for_manual_retrieval():
+    """A thin week is mostly backfill: that is when the list matters most."""
+    classic = make_paper("classic", "c", 5.0, is_backfill=True, oa_status="closed", cited_by_count=900)
+    digest = build_digest([], [classic], date(2026, 8, 21), top_n=3)
+    assert [p.title for p in digest.needs_manual] == ["classic"]
+    assert "需人工取全文" in render_markdown(digest, FIELDS)
+
+
+def test_email_trimming_never_keeps_a_heading_without_its_papers():
+    papers = [make_paper(f"paper{i}", f"cluster{i % 12}", float(i)) for i in range(240)]
+    digest = build_digest(papers, [], date(2026, 8, 21), top_n=3)
+    html = render_email_html(digest, FIELDS, max_bytes=9000)
+    assert len(html.encode("utf-8")) <= 9000
+    for name, _ in digest.clusters:
+        if f"{name}（" in html:
+            heading_at = html.index(f"{name}（")
+            assert "<table" in html[heading_at:], f"{name} heading kept without its list"

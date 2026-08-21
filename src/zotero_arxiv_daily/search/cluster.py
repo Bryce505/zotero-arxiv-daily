@@ -19,6 +19,8 @@ from loguru import logger
 from ..protocol import CorpusPaper, Paper
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", flags=re.DOTALL)
+_MAX_PROMPT_TITLES = 300  # beyond this the response outgrows max_tokens
+_MIN_CACHE_COVERAGE = 0.85
 
 
 @dataclass
@@ -34,10 +36,18 @@ def corpus_fingerprint(corpus: list[CorpusPaper]) -> str:
     return hashlib.sha256("\n".join(titles).encode("utf-8")).hexdigest()[:16]
 
 
-def _build_prompt(corpus: list[CorpusPaper], n_clusters: int) -> str:
-    listing = "\n".join(f"[{i}] {c.title}" for i, c in enumerate(corpus))
+def _sample_indices(size: int, max_titles: int) -> list[int]:
+    """Evenly spaced indices spanning the corpus, at most *max_titles* of them."""
+    if size <= max_titles:
+        return list(range(size))
+    stride = size / max_titles
+    return sorted({min(int(i * stride), size - 1) for i in range(max_titles)})
+
+
+def _build_prompt(corpus: list[CorpusPaper], n_clusters: int, sample: list[int]) -> str:
+    listing = "\n".join(f"[{local}] {corpus[real].title}" for local, real in enumerate(sample))
     return (
-        f"下面是一位生物制药 CMC 分析科学家的文献库，共 {len(corpus)} 篇。\n"
+        f"下面是一位生物制药 CMC 分析科学家的文献库，共 {len(sample)} 篇。\n"
         f"请按**分析方法学主题**把它们聚成 {n_clusters} 个簇。\n"
         "注意：库中的分类含项目代号（如 KJ103、BJ044），请忽略项目归属，只按方法学主题聚类。\n"
         "每篇必须且只能归入一个簇。只输出 JSON，不要输出其他内容：\n"
@@ -90,19 +100,35 @@ def _cluster_corpus_strict(
     client,
     llm_params: dict,
     n_clusters: int,
+    max_titles: int = _MAX_PROMPT_TITLES,
 ) -> list[ThemeCluster]:
-    """Group *corpus* into themes, raising if the model cannot be parsed."""
+    """Group *corpus* into themes, raising if the model cannot be parsed.
+
+    A corpus larger than *max_titles* is sampled for the prompt: asking for
+    membership of every paper at once outgrows the response token budget, and
+    the failure is silent (the digest collapses to one theme).  Papers outside
+    the sample are folded into the largest cluster, so a library well beyond
+    this size wants a different assignment strategy — see the plan doc.
+    """
+    sample = _sample_indices(len(corpus), max_titles)
+    if len(sample) < len(corpus):
+        logger.warning(
+            f"Corpus of {len(corpus)} papers exceeds the {max_titles}-title prompt cap; "
+            f"clustering on a {len(sample)}-paper sample and folding the rest into the largest theme"
+        )
     response = client.chat.completions.create(
         messages=[
             {
                 "role": "system",
                 "content": "你是一位生物制药 CMC 分析领域的文献主题归纳专家，只输出 JSON。",
             },
-            {"role": "user", "content": _build_prompt(corpus, n_clusters)},
+            {"role": "user", "content": _build_prompt(corpus, n_clusters, sample)},
         ],
         **llm_params.get("generation_kwargs", {}),
     )
-    clusters = _parse_clusters(response.choices[0].message.content, len(corpus))
+    clusters = _parse_clusters(response.choices[0].message.content, len(sample))
+    for cluster in clusters:
+        cluster.members = [sample[i] for i in cluster.members]
     return _absorb_unassigned(clusters, len(corpus))
 
 
@@ -111,10 +137,11 @@ def cluster_corpus(
     client,
     llm_params: dict,
     n_clusters: int = 5,
+    max_titles: int = _MAX_PROMPT_TITLES,
 ) -> list[ThemeCluster]:
     """Ask the LLM to group *corpus* into themes; never raises."""
     try:
-        return _cluster_corpus_strict(corpus, client, llm_params, n_clusters)
+        return _cluster_corpus_strict(corpus, client, llm_params, n_clusters, max_titles)
     except Exception as exc:  # noqa: BLE001 - clustering must never break the run
         logger.warning(f"Corpus clustering failed ({exc}); falling back to a single cluster")
         return _single_cluster(corpus)
@@ -130,6 +157,14 @@ def _to_cache(clusters: list[ThemeCluster], corpus: list[CorpusPaper]) -> list[d
         }
         for c in clusters
     ]
+
+
+def _cache_coverage(cached: list[dict], corpus: list[CorpusPaper]) -> float:
+    """Fraction of the current corpus the cached membership already covers."""
+    if not corpus or not cached:
+        return 0.0
+    known = {t for raw in cached for t in raw.get("member_titles", [])}
+    return sum(1 for c in corpus if c.title in known) / len(corpus)
 
 
 def _from_cache(cached: list[dict], corpus: list[CorpusPaper]) -> list[ThemeCluster]:
@@ -162,9 +197,14 @@ def load_or_build_clusters(
         try:
             with open(path, encoding="utf-8") as handle:
                 cached = json.load(handle)
-            if cached.get("fingerprint") == fingerprint:
-                logger.info(f"Reusing cached theme clusters from {path}")
+            coverage = _cache_coverage(cached.get("clusters", []), corpus)
+            if coverage >= _MIN_CACHE_COVERAGE:
+                logger.info(
+                    f"Reusing cached theme clusters from {path} "
+                    f"({coverage:.0%} of the corpus already assigned)"
+                )
                 return _from_cache(cached["clusters"], corpus)
+            logger.info(f"Cluster cache covers only {coverage:.0%} of the corpus; re-clustering")
         except Exception as exc:  # noqa: BLE001 - a corrupt cache must not break the run
             logger.warning(f"Ignoring unreadable cluster cache {path}: {exc}")
 

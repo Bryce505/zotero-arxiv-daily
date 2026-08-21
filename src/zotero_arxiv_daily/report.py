@@ -54,7 +54,9 @@ def build_digest(papers: list[Paper], backfill: list[Paper], anchor: date, top_n
         clusters=ordered,
         backfill=sorted(backfill, key=lambda p: -(p.cited_by_count or 0)),
         top_picks=sorted(fresh, key=lambda p: -(p.score or 0.0))[:top_n],
-        needs_manual=[p for p in fresh if p.oa_status != "open"],
+        # Backfill included: a thin week is mostly backfill, which is exactly
+        # when the manual-retrieval list matters.
+        needs_manual=[p for p in fresh + list(backfill) if p.oa_status != "open"],
     )
 
 
@@ -265,18 +267,21 @@ def render_email_html(digest: Digest, fields: list[FieldSpec], max_bytes: int = 
         f"覆盖期 {digest.start.isoformat()} ~ {digest.end.isoformat()}　共 {digest.total} 篇</p>"
     )
 
+    # One block per section, heading and content together: a heading kept
+    # without its papers is worse than dropping the section outright.
     blocks: list[str] = []
     if digest.top_picks:
-        blocks.append(_email_heading("本周优先读"))
-        blocks.extend(_email_pick(p, fields) for p in digest.top_picks)
+        blocks.append(
+            _email_heading("本周优先读") + "".join(_email_pick(p, fields) for p in digest.top_picks)
+        )
 
     for name, papers in digest.clusters:
-        blocks.append(_email_heading(f"{escape(name)}（{len(papers)} 篇）"))
-        blocks.append(_email_list(papers))
+        blocks.append(
+            _email_heading(f"{escape(name)}（{len(papers)} 篇）") + _email_list(papers)
+        )
 
     if digest.backfill:
-        blocks.append(_email_heading("经典补位"))
-        blocks.append(_email_list(digest.backfill))
+        blocks.append(_email_heading("经典补位") + _email_list(digest.backfill))
 
     footer = f'<p style="margin:18px 0 0;color:#5C6660;font-size:12px">{_TRUNCATION_NOTE}</p>'
 
@@ -291,9 +296,10 @@ def render_email_html(digest: Digest, fields: list[FieldSpec], max_bytes: int = 
         '<p style="margin:14px 0 0;color:#94372C;font-size:12px">'
         f"内容较多，正文已截断。{_TRUNCATION_NOTE}</p>"
     )
+    # Skip a section that does not fit rather than stopping: a later, smaller
+    # one may still earn its place.
     kept: list[str] = []
     for block in blocks:
-        if len(assemble(kept + [block], note).encode("utf-8")) > max_bytes:
-            break
-        kept.append(block)
+        if len(assemble(kept + [block], note).encode("utf-8")) <= max_bytes:
+            kept.append(block)
     return assemble(kept, note)

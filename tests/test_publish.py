@@ -96,3 +96,39 @@ def test_commit_failure_is_reported_not_raised(tmp_path):
     os.makedirs(not_a_repo)
     write_text(os.path.join(not_a_repo, "a.md"), "x")
     assert git_commit_paths(["a.md"], "docs: add", make_config(), cwd=not_a_repo) is False
+
+
+def test_a_missing_path_does_not_sink_the_whole_commit(tmp_path):
+    """git add is all-or-nothing: one bad pathspec stages nothing at all.
+
+    The digest and the seen-DOI state must still be archived when an
+    optional artefact (a cache that degraded, a gitignored library) is
+    absent.
+    """
+    repo = _init_repo(tmp_path)
+    write_text(os.path.join(repo, "reports", "a.md"), "# report")
+    assert git_commit_paths(
+        ["reports/a.md", "state/never_written.json"], "docs: add report", make_config(), cwd=repo
+    ) is True
+    tracked = subprocess.run(
+        ["git", "show", "--name-only", "--pretty=", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout
+    assert "reports/a.md" in tracked
+
+
+def test_a_gitignored_path_does_not_sink_the_whole_commit(tmp_path):
+    repo = _init_repo(tmp_path)
+    with open(os.path.join(repo, ".gitignore"), "w", encoding="utf-8") as handle:
+        handle.write("library/\n")
+    subprocess.run(["git", "add", ".gitignore"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "ignore"], cwd=repo, check=True)
+    write_text(os.path.join(repo, "reports", "a.md"), "# report")
+    write_text(os.path.join(repo, "library", "x.pdf"), "pdf")
+    assert git_commit_paths(
+        ["reports/a.md", "library"], "docs: add report", make_config(), cwd=repo
+    ) is True
+
+
+def test_a_commit_of_only_missing_paths_is_skipped(tmp_path):
+    repo = _init_repo(tmp_path)
+    assert git_commit_paths(["nope/a.md"], "docs: add", make_config(), cwd=repo) is False

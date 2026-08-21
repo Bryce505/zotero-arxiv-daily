@@ -146,3 +146,31 @@ def test_dedup_does_not_let_a_duplicate_overwrite_existing_values():
     merged = dedup_papers([first, second])
     assert merged[0].pdf_url == "https://first.example.org/p.pdf"
     assert merged[0].cited_by_count == 42  # only the gaps are filled
+
+
+def test_a_doi_less_record_collapses_into_its_doi_bearing_twin():
+    """PubMed often omits the DOI that Crossref supplies for the same paper."""
+    from zotero_arxiv_daily.protocol import Paper
+
+    no_doi = Paper(source="pubmed", title="Charge Variants: A Review", authors=[], abstract="a", url="u")
+    with_doi = Paper(
+        source="crossref",
+        title="charge variants a review",
+        authors=[],
+        abstract="a",
+        url="u2",
+        doi="10.1016/x",
+    )
+    merged = dedup_papers([no_doi, with_doi])
+    assert len(merged) == 1
+    assert merged[0].doi == "10.1016/x", "the DOI must survive so seen_dois records it"
+
+
+def test_the_same_collapse_works_in_the_other_order():
+    from zotero_arxiv_daily.protocol import Paper
+
+    with_doi = Paper(source="crossref", title="Charge Variants", authors=[], abstract="a", url="u", doi="10.1016/x")
+    no_doi = Paper(source="pubmed", title="charge variants", authors=[], abstract="a", url="u2")
+    merged = dedup_papers([with_doi, no_doi])
+    assert len(merged) == 1
+    assert merged[0].doi == "10.1016/x"

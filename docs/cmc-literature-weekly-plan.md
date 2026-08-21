@@ -571,3 +571,57 @@ DeepSeek 官方 API 无 embedding 接口，因此向量化需另行解决。
 - [Elsevier 文本与数据挖掘政策](https://www.elsevier.com/about/policies-and-standards/text-and-data-mining)
 - [Elsevier TDM 常见问题](https://www.elsevier.com/about/policies-and-standards/text-and-data-mining/faq)
 - [Semantic Scholar API Release Notes（key 申请政策与限额）](https://github.com/allenai/s2-folks/blob/main/API_RELEASE_NOTES.md)
+
+---
+
+## 9. 实现状态（2026-08-21）
+
+方案已按路线 A + B 全部实现并合入 `main`。部署与首跑见 **`docs/cmc-weekly-setup.md`**；逐任务的 TDD 计划见 `docs/superpowers/plans/2026-08-21-cmc-literature-weekly.md`。
+
+### 9.1 九个阶段的落点
+
+| 阶段 | 模块 | 状态 |
+| --- | --- | --- |
+| ① Zotero 语料 | `executor.py`（复用） | 仅新增 `CorpusPaper.doi` |
+| ② 主题聚类 + 检索式蒸馏 | `search/cluster.py` · `search/profile.py` | 带覆盖率缓存 |
+| ③ 多源检索 | `retriever/{pubmed,europepmc,crossref,openalex}_retriever.py` | 新增平行注册表 |
+| ④ DOI 归一去重 | `dedup.py` | 含跨源字段合并 |
+| ⑤ 按簇配额 | `quota.py` + `weekly.py:_score_and_assign` | sqrt 配额 |
+| ⑤b 高引补位 | `backfill.py` | OpenAlex `cited_by_count` |
+| ⑥ OA 全文阶梯 | `fulltext/resolver.py` | 直链 → Unpaywall → Europe PMC |
+| ⑦ 结构化抽取 | `extract.py` | 字段由 `report.fields` 驱动 |
+| ⑧ 三层渲染 · 入库 · 群发 | `report.py` · `publish.py` · `mailer.py` | |
+| P5 月度综述 | `monthly.py` | 独立 workflow |
+
+**一处偏离 §5：** 原计划「`retriever/base.py` 0 改动，作为新检索器基类」。实际 `retrieve_papers()` 是无参 firehose 签名，塞不进「检索式 + 日期窗口 + 上限」。改为**新增平行基类与独立注册表**，`retriever/base.py` 与四个预印本检索器真正 0 改动。
+
+**一处偏离 §8.6：** 覆盖期从「上周六~本周五」改为「**上周五~本周五**」（8 天，相邻窗口重叠一天）。管线在周五 12:00 UTC 跑，当天晚些时候入库的文献在原设计下会掉进任何窗口之外、永久丢失。跨周去重让这一天重叠不产生重复。
+
+### 9.2 五轮审查
+
+13 → 6 → 7 → 7 → 5，共 38 条，全部核实并修复。几条真会让流水线失效的：
+
+- `weekly.py`/`monthly.py` 用相对导入，而 workflow 当脚本跑 → **每次定时运行启动即死**。包级测试抓不到，`tests/test_entrypoints.py` 现在以脚本方式运行三个入口
+- `email.recipients` 被读取但未声明；修复后又漏接 `${oc.env:RECIPIENTS}`，而 `custom.yaml` 的 `receiver` 插值一个 workflow 不导出的 secret → 最后一步抛插值错误
+- 簇缓存存位置索引而指纹对顺序不敏感 → Zotero 一改动就**静默错配**主题
+- 失败的 LLM 调用把降级结果写进缓存并提交进 git → 一次 API 抖动**永久**塌成单一主题
+- `save_seen` 在 `send_digest` 之前 → 邮件失败会把当周文献永久埋掉
+- `git add` 全有全无 → 一个可选产物缺失，整周归档全丢
+
+### 9.3 8.7 节三个选项的现状
+
+| 选项 | 状态 |
+| --- | --- |
+| 1. 改用 embedding API | **仍待你决定**——需要多办一个 key。仓库已有 `api` reranker，改配置即可，样例见 setup 文档 §4 |
+| 2. 缓存语料向量 | ✅ **已实现**（`reranker/vector_cache.py`），`reranker.vector_cache` 开启 |
+| 3. 维持现状 | 默认行为（不设 `vector_cache` 即是） |
+
+选项 2 只砍掉**固定的约 7 分钟**（语料 111 篇 × 3.9 秒）。候选每周都是新的，缓存不了：200 篇约 13 分钟，600 篇约 39 分钟。**要真正解决重排开销，仍需选项 1。**
+
+### 9.4 已知限制
+
+1. **未经真实数据验证。** 399 条测试全部基于桩数据。首跑必然暴露预料之外的问题
+2. **语料超约 400 篇聚类退化。** 超过 300 篇自动采样，未采样篇目并入最大簇——语义粗糙。按每年 +100 篇算约三年后需换用 embedding 相似度分配；届时日志有明确告警
+3. **中英混合语料的 embedding 质量未验证**（发现于 8.7 节冒烟测试，至今无实测数据）
+4. **P4 邮件源摄取未实现**（Google Scholar / 知网 / X-MOL IMAP）——方案标注为可选，且需先开专用邮箱
+5. **上图代理未接入**，且按发现 4 不建议接

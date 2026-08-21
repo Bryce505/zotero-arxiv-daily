@@ -4,7 +4,7 @@ import warnings
 import numpy as np
 @register_reranker("local")
 class LocalReranker(BaseReranker):
-    def get_similarity_score(self, s1: list[str], s2: list[str]) -> np.ndarray:
+    def _encoder(self):
         from sentence_transformers import SentenceTransformer
         if not self.config.executor.debug:
             from transformers.utils import logging as transformers_logging
@@ -20,10 +20,18 @@ class LocalReranker(BaseReranker):
             warnings.filterwarnings("ignore", category=FutureWarning)
 
         encoder = SentenceTransformer(self.config.reranker.local.model, trust_remote_code=True)
-        if self.config.reranker.local.encode_kwargs:
-            encode_kwargs = self.config.reranker.local.encode_kwargs
-        else:
-            encode_kwargs = {}
+        encode_kwargs = self.config.reranker.local.encode_kwargs or {}
+        return encoder, encode_kwargs
+
+    def embed(self, texts: list[str]) -> np.ndarray:
+        """Return the [n_texts, dim] embedding matrix."""
+        if not texts:
+            return np.empty((0, 0))
+        encoder, encode_kwargs = self._encoder()
+        return np.asarray(encoder.encode(texts, **encode_kwargs, show_progress_bar=True))
+
+    def get_similarity_score(self, s1: list[str], s2: list[str]) -> np.ndarray:
+        encoder, encode_kwargs = self._encoder()
         s1_feature = encoder.encode(s1,**encode_kwargs,show_progress_bar=True)
         s2_feature = encoder.encode(s2,**encode_kwargs,show_progress_bar=True)
         sim = encoder.similarity(s1_feature, s2_feature)

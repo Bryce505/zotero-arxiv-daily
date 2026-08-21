@@ -1,7 +1,7 @@
 """LLM corpus clustering, fingerprint caching, and candidate assignment."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import numpy as np
@@ -21,7 +21,7 @@ def make_corpus(n: int = 4) -> list[CorpusPaper]:
         CorpusPaper(
             title=f"Paper {i}",
             abstract=f"Abstract {i}",
-            added_date=datetime(2026, 1, i + 1),
+            added_date=datetime(2026, 1, 1) + timedelta(days=i),
             paths=["文献/表征"],
         )
         for i in range(n)
@@ -224,3 +224,56 @@ def test_a_failed_clustering_is_not_cached(tmp_path):
 
     recovered = load_or_build_clusters(path, corpus, stub_client(VALID_PAYLOAD), LLM_PARAMS)
     assert [c.name for c in recovered] == ["电荷异质性", "宿主细胞蛋白"]
+
+
+def test_adding_one_paper_does_not_force_a_reclustering(tmp_path):
+    """Otherwise the cache never survives: themes and headings drift weekly."""
+    path = str(tmp_path / "clusters.json")
+    load_or_build_clusters(path, make_corpus(20), stub_client(VALID_PAYLOAD), LLM_PARAMS)
+
+    # Counting rather than raising: the module deliberately swallows
+    # exceptions from the client, so a raise here would pass for the wrong reason.
+    calls = {"n": 0}
+
+    def counting(**kw):
+        calls["n"] += 1
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=VALID_PAYLOAD))])
+
+    cold = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=counting)))
+    clusters = load_or_build_clusters(path, make_corpus(21), cold, LLM_PARAMS)
+    assert calls["n"] == 0, "one new paper must not trigger a rebuild"
+    covered = {i for c in clusters for i in c.members}
+    assert covered == set(range(21)), "the newcomer must still be clustered"
+
+
+def test_a_substantially_changed_corpus_does_force_a_reclustering(tmp_path):
+    path = str(tmp_path / "clusters.json")
+    load_or_build_clusters(path, make_corpus(20), stub_client(VALID_PAYLOAD), LLM_PARAMS)
+
+    other = json.dumps({"clusters": [{"name": "新主题", "description": "d", "members": [0]}]}, ensure_ascii=False)
+    rebuilt = load_or_build_clusters(path, make_corpus(60), stub_client(other), LLM_PARAMS)
+    assert rebuilt[0].name == "新主题"
+
+
+def test_a_large_corpus_is_sampled_rather_than_sent_whole(tmp_path):
+    """The whole-corpus prompt is what breaks at scale; cap it loudly."""
+    recorded = []
+
+    def create(**kwargs):
+        recorded.append(kwargs["messages"][-1]["content"])
+        members = list(range(50))
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=json.dumps({"clusters": [{"name": "x", "description": "d", "members": members}]})
+                    )
+                )
+            ]
+        )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    clusters = cluster_corpus(make_corpus(400), client, LLM_PARAMS, n_clusters=2, max_titles=50)
+    assert "Paper 399" not in recorded[0], "the prompt must be capped"
+    covered = {i for c in clusters for i in c.members}
+    assert covered == set(range(400)), "every paper must still land somewhere"

@@ -24,9 +24,15 @@ def week_label(d: date) -> str:
 
 
 def week_window(d: date) -> tuple[date, date]:
-    """Return the inclusive ``(start, end)`` dates covered by *d*'s week."""
+    """Return the inclusive ``(start, end)`` dates covered by *d*'s week.
+
+    The window reaches back to the *previous* Friday, so consecutive windows
+    overlap by a day rather than merely abutting: the digest runs at midday
+    UTC, and anything indexed later that same Friday would otherwise fall
+    into no window at all.  Cross-week de-duplication makes the overlap free.
+    """
     friday = anchor_friday(d)
-    return friday - timedelta(days=6), friday
+    return friday - timedelta(days=7), friday
 
 
 def report_paths(d: date) -> tuple[str, str]:
