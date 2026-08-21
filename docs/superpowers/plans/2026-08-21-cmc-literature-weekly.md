@@ -388,8 +388,8 @@ def test_title_key_ignores_case_punctuation_and_spacing():
 
 def test_dedup_keeps_the_first_paper_per_doi():
     papers = [
-        make_paper(title="First", doi="10.1/x", source="pubmed"),
-        make_paper(title="Second", doi="https://doi.org/10.1/X", source="crossref"),
+        make_paper(title="First", doi="10.1000/x", source="pubmed"),
+        make_paper(title="Second", doi="https://doi.org/10.1000/X", source="crossref"),
     ]
     result = dedup_papers(papers)
     assert len(result) == 1
@@ -405,29 +405,29 @@ def test_dedup_falls_back_to_title_for_papers_without_a_doi():
 
 
 def test_dedup_keeps_distinct_papers():
-    papers = [make_paper(title="A", doi="10.1/a"), make_paper(title="B", doi="10.1/b")]
+    papers = [make_paper(title="A", doi="10.1000/a"), make_paper(title="B", doi="10.1000/b")]
     assert len(dedup_papers(papers)) == 2
 
 
 def test_a_doi_bearing_paper_never_collapses_into_a_different_doi():
-    papers = [make_paper(title="Same Title", doi="10.1/a"), make_paper(title="Same Title", doi="10.1/b")]
+    papers = [make_paper(title="Same Title", doi="10.1000/a"), make_paper(title="Same Title", doi="10.1000/b")]
     assert len(dedup_papers(papers)) == 2
 
 
 def test_drop_seen_removes_papers_whose_doi_was_already_sent():
-    papers = [make_paper(doi="10.1/a"), make_paper(doi="10.1/b")]
-    assert [p.doi for p in drop_seen(papers, {"10.1/a"})] == ["10.1/b"]
+    papers = [make_paper(doi="10.1000/a"), make_paper(doi="10.1000/b")]
+    assert [p.doi for p in drop_seen(papers, {"10.1000/a"})] == ["10.1000/b"]
 
 
 def test_drop_seen_keeps_papers_without_a_doi():
     papers = [make_paper(doi=None)]
-    assert len(drop_seen(papers, {"10.1/a"})) == 1
+    assert len(drop_seen(papers, {"10.1000/a"})) == 1
 
 
 def test_seen_state_round_trips(tmp_path):
     path = str(tmp_path / "seen.json")
-    save_seen(path, {"10.1/b", "10.1/a"})
-    assert load_seen(path) == {"10.1/a", "10.1/b"}
+    save_seen(path, {"10.1000/b", "10.1000/a"})
+    assert load_seen(path) == {"10.1000/a", "10.1000/b"}
 
 
 def test_load_seen_on_a_missing_file_is_empty():
@@ -436,9 +436,9 @@ def test_load_seen_on_a_missing_file_is_empty():
 
 def test_saved_seen_state_is_sorted_for_stable_diffs(tmp_path):
     path = str(tmp_path / "seen.json")
-    save_seen(path, {"10.1/c", "10.1/a", "10.1/b"})
+    save_seen(path, {"10.1000/c", "10.1000/a", "10.1000/b"})
     with open(path, encoding="utf-8") as handle:
-        assert json.load(handle) == ["10.1/a", "10.1/b", "10.1/c"]
+        assert json.load(handle) == ["10.1000/a", "10.1000/b", "10.1000/c"]
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -2337,7 +2337,7 @@ WORK = {
     "open_access": {"is_oa": True, "oa_url": "https://example.org/paper.pdf"},
 }
 
-RESPONSE = {"results": [WORK, dict(WORK, abstract_inverted_index=None, doi="https://doi.org/10.1/no-abstract")]}
+RESPONSE = {"results": [WORK, dict(WORK, abstract_inverted_index=None, doi="https://doi.org/10.1000/no-abstract")]}
 
 
 @pytest.fixture()
@@ -2440,38 +2440,38 @@ PROFILES = [
 
 
 def test_backfill_returns_at_most_what_is_needed():
-    pool = [make_paper(f"10.1/{i}", 100 - i) for i in range(10)]
+    pool = [make_paper(f"10.1000/{i}", 100 - i) for i in range(10)]
     result = backfill_papers(PROFILES, StubRetriever(pool), needed=3, exclude_dois=set())
     assert len(result) == 3
 
 
 def test_backfill_orders_by_citation_count():
-    pool = [make_paper("10.1/low", 5), make_paper("10.1/high", 500), make_paper("10.1/mid", 50)]
+    pool = [make_paper("10.1000/low", 5), make_paper("10.1000/high", 500), make_paper("10.1000/mid", 50)]
     result = backfill_papers(PROFILES, StubRetriever(pool), needed=3, exclude_dois=set())
     assert [p.cited_by_count for p in result] == [500, 50, 5]
 
 
 def test_backfill_excludes_dois_already_in_the_digest_or_library():
-    pool = [make_paper("10.1/a", 100), make_paper("10.1/b", 90)]
-    result = backfill_papers(PROFILES, StubRetriever(pool), needed=5, exclude_dois={"10.1/a"})
-    assert [p.doi for p in result] == ["10.1/b"]
+    pool = [make_paper("10.1000/a", 100), make_paper("10.1000/b", 90)]
+    result = backfill_papers(PROFILES, StubRetriever(pool), needed=5, exclude_dois={"10.1000/a"})
+    assert [p.doi for p in result] == ["10.1000/b"]
 
 
 def test_backfill_deduplicates_across_clusters():
-    pool = [make_paper("10.1/same", 100)]
+    pool = [make_paper("10.1000/same", 100)]
     result = backfill_papers(PROFILES, StubRetriever(pool), needed=5, exclude_dois=set())
     assert len(result) == 1
 
 
 def test_backfill_tags_each_paper_with_its_cluster():
-    retriever = StubRetriever([make_paper("10.1/a", 100)])
+    retriever = StubRetriever([make_paper("10.1000/a", 100)])
     result = backfill_papers(PROFILES[:1], retriever, needed=1, exclude_dois=set())
     assert result[0].cluster == "a"
     assert result[0].is_backfill is True
 
 
 def test_backfill_does_nothing_when_nothing_is_needed():
-    retriever = StubRetriever([make_paper("10.1/a", 100)])
+    retriever = StubRetriever([make_paper("10.1000/a", 100)])
     assert backfill_papers(PROFILES, retriever, needed=0, exclude_dois=set()) == []
     assert retriever.calls == []
 ```
@@ -2745,7 +2745,7 @@ def test_unpaywall_is_consulted_when_there_is_no_direct_url(cfg, monkeypatch, no
         return pdf_response()
 
     monkeypatch.setattr(requests, "get", _patched)
-    result = resolve_pdf(make_paper(doi="10.1/a"), cfg)
+    result = resolve_pdf(make_paper(doi="10.1000/a"), cfg)
     assert result.pdf_bytes == PDF_BYTES
     assert result.source == "unpaywall"
     assert result.oa_status == "open"
@@ -2755,7 +2755,7 @@ def test_unpaywall_is_skipped_without_a_contact_email(monkeypatch, no_sleep):
     cfg = OmegaConf.create({"fulltext": {"enabled": True, "unpaywall_email": None, "max_bytes": 1000}})
     calls = []
     monkeypatch.setattr(requests, "get", lambda url, **kw: calls.append(url) or pdf_response())
-    resolve_pdf(make_paper(doi="10.1/a"), cfg)
+    resolve_pdf(make_paper(doi="10.1000/a"), cfg)
     assert not any("unpaywall" in c for c in calls)
 
 
@@ -2766,7 +2766,7 @@ def test_a_closed_paper_yields_no_bytes(cfg, monkeypatch, no_sleep):
         raise requests.HTTPError("403")
 
     monkeypatch.setattr(requests, "get", _patched)
-    result = resolve_pdf(make_paper(doi="10.1/a"), cfg)
+    result = resolve_pdf(make_paper(doi="10.1000/a"), cfg)
     assert result.pdf_bytes is None
     assert result.oa_status == "closed"
 
@@ -2827,7 +2827,7 @@ def test_download_leaves_closed_papers_abstract_only(cfg, tmp_path, monkeypatch,
         raise requests.HTTPError("403")
 
     monkeypatch.setattr(requests, "get", _patched)
-    papers = [make_paper(doi="10.1/closed", pdf_url="https://example.org/a.pdf")]
+    papers = [make_paper(doi="10.1000/closed", pdf_url="https://example.org/a.pdf")]
     download_fulltext(papers, cfg, str(tmp_path))
     assert papers[0].pdf_path is None
     assert papers[0].full_text is None
@@ -2841,7 +2841,7 @@ def test_a_failed_extraction_still_keeps_the_pdf(cfg, tmp_path, monkeypatch, no_
         raise RuntimeError("pymupdf exploded")
 
     monkeypatch.setattr("zotero_arxiv_daily.fulltext.resolver.extract_markdown_from_pdf", _boom)
-    papers = [make_paper(doi="10.1/x", pdf_url="https://example.org/a.pdf")]
+    papers = [make_paper(doi="10.1000/x", pdf_url="https://example.org/a.pdf")]
     download_fulltext(papers, cfg, str(tmp_path))
     assert papers[0].pdf_path is not None
     assert papers[0].full_text is None
@@ -3323,7 +3323,7 @@ def make_paper(title, cluster, score, **kw) -> Paper:
         cluster=cluster,
         journal="J Chromatogr A",
         pub_date=date(2026, 8, 18),
-        doi="10.1/" + title,
+        doi="10.1000/" + title,
         extraction={"background": f"{title} 背景", "insight": f"{title} 洞见"},
     )
     base.update(kw)
@@ -3387,7 +3387,7 @@ def test_markdown_renders_each_configured_field_label():
 
 def test_markdown_links_dois_not_repository_paths():
     text = render_markdown(sample_digest(), FIELDS)
-    assert "https://doi.org/10.1/alpha" in text
+    assert "https://doi.org/10.1000/alpha" in text
     assert "library/" not in text
 
 
@@ -4262,7 +4262,7 @@ def make_candidate(i: int) -> Paper:
         authors=["Smith J"],
         abstract=f"Candidate abstract {i}",
         url=f"https://example.org/{i}",
-        doi=f"10.1/{i}",
+        doi=f"10.1000/{i}",
         journal="J Chromatogr A",
         pub_date=date(2026, 8, 18),
     )
@@ -4393,14 +4393,14 @@ def test_weekly_run_records_delivered_dois_for_next_week(weekly_config, stubbed,
 
     WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
     with open(tmp_path / "seen.json", encoding="utf-8") as handle:
-        assert "10.1/0" in json.load(handle)
+        assert "10.1000/0" in json.load(handle)
 
 
 def test_papers_delivered_last_week_are_not_delivered_again(weekly_config, stubbed, tmp_path):
     executor = WeeklyExecutor(weekly_config)
     executor.run(anchor=date(2026, 8, 21))
     second = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 28))
-    assert second is None or all(p.doi != "10.1/0" for _, papers in second.clusters for p in papers)
+    assert second is None or all(p.doi != "10.1000/0" for _, papers in second.clusters for p in papers)
 
 
 def test_every_candidate_is_assigned_a_cluster(weekly_config, stubbed):
