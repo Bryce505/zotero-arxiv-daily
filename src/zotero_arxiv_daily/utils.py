@@ -201,3 +201,26 @@ def http_get_with_retry(
             logger.warning(f"GET {url} failed ({exc}); retrying in {delay:.0f}s")
             sleep(delay)
             delay *= 2
+
+
+_CHARS_PER_TOKEN = 4  # conservative for mixed Chinese/English text
+
+
+def truncate_for_prompt(text: str, max_tokens: int) -> str:
+    """Trim *text* to roughly *max_tokens* tokens.
+
+    Prefers a real tokenizer, but falls back to a character estimate when
+    tiktoken cannot reach its encoding files — the weekly run must not depend
+    on a model-vocabulary download succeeding at runtime.
+    """
+    if not text:
+        return text
+    try:
+        import tiktoken
+
+        enc = tiktoken.encoding_for_model("gpt-4o")
+        return enc.decode(enc.encode(text)[:max_tokens])
+    except Exception as exc:  # noqa: BLE001 - offline or blocked; estimate instead
+        logger.debug(f"tiktoken unavailable ({exc}); truncating by character count")
+        return text[: max_tokens * _CHARS_PER_TOKEN]
+
