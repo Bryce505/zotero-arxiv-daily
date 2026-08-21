@@ -61,7 +61,11 @@ Zotero 分类（表征 / 活性 / 理化）本身就是主题标签。做法：�
 
 ### 发现 5 — Google Scholar 与知网进不了自动化，但有等效替代 【调整源清单】
 
-**Google Scholar** 无公开 API，数据中心 IP 几次请求就吃 CAPTCHA，靠代理池维持既不稳也不合规。替代：**OpenAlex**（免注册免 key，10 万次/天，带引用数和概念标签）+ **Semantic Scholar API**（免费，有 key 档）。两者合起来覆盖 Scholar 的大部分能力，而且是结构化的。
+**Google Scholar** 无公开 API，数据中心 IP 几次请求就吃 CAPTCHA，靠代理池维持既不稳也不合规。替代：**OpenAlex**（免注册免 key，10 万次/天，带引用数和概念标签）+ **Semantic Scholar**（免注册可用）。两者合起来覆盖 Scholar 的大部分能力，而且是结构化的。
+
+**检索骨干是 OpenAlex，不是 S2。** OpenAlex 覆盖 2.5 亿+ 条记录、免注册、直接给出 OA 状态，更适合当主力；S2 只是补充召回。这一点很重要，因为 **S2 的 API key 很难申请**：官方 release notes 载明 2024 年 8 月起「不再批准来自免费邮箱域名的 key 申请」「不再批准第三方应用的 key 申请」，2024 年 11 月起「新申请积压约 1 个月」，且 2024 年 4 月之后发的新 key 一律只有 1 RPS。
+
+**但不需要申请。** S2 未认证用户共享 5000 次 / 5 分钟的池子，对每周一次、合计几百次请求的量级完全够用，配指数退避重试即可（官方本来也强制要求退避）。若 429 确实频繁，直接把 S2 从源清单摘掉也不影响周报质量。**不要把 S2 key 列为开工阻塞项。**
 
 **知网** 无公开 API、强反爬、许可禁止抓取。建议中文文献仍走知网自带订阅人工看，并在周报里**明确标注这是已知盲区** —— 诚实标注盲区比假装覆盖了更有价值。好在 CMC 分析的方法学前沿基本在英文期刊。
 
@@ -205,10 +209,11 @@ MinerU 解析质量更好（尤其表格），但模型体积大、需要显著�
 | --- | --- | --- | --- |
 | Zotero 语料（云 API） | **高** | 需确认数据同步已开启 | 采用 |
 | Zotero 语料（Drive sqlite） | 中 | OAuth + 解析 + 易随版本失效 | 仅作兜底 |
-| PubMed 检索 | **高** | 建议申请 API key 提速至 10 req/s | 采用 |
+| PubMed 检索 | **高** | 建议办 NCBI API key 提速至 10 req/s（自助生成，秒出） | 采用 |
 | Europe PMC 检索 + OA 全文 | **高** | 无（免注册免 key） | 采用，优先级最高 |
 | Crossref 检索 | **高** | 带 mailto 进 polite pool | 采用 |
-| OpenAlex / Semantic Scholar | **高** | OpenAlex 免 key 10万/天；S2 需 key | 采用 |
+| OpenAlex | **高** | 无（免注册免 key，10万/天） | 采用，作检索骨干 |
+| Semantic Scholar | **高**（前提是走无 key 模式） | key 难申请（见发现 5）；共享池需指数退避 | 采用作补充；429 频繁则可摘掉 |
 | bioRxiv / medRxiv / chemRxiv / arXiv | **高** | 已实现并有测试 | 采用 |
 | OA 全文 PDF（Unpaywall 阶梯） | **高** | 覆盖率非 100%，需降级路径 | 采用 |
 | Google Scholar | 低 | 无 API，数据中心 IP 必遭 CAPTCHA | **放弃**，用 OpenAlex + S2 替代 |
@@ -221,6 +226,21 @@ MinerU 解析质量更好（尤其表格），但模型体积大、需要显著�
 | 多人邮件 + 附件 | **高** | SMTP 20–25MB 上限 | 采用 + 大小护栏 |
 | 周五 20:00 定时 | **高** | cron 为 UTC；高峰延迟；60 天停用 | `0 12 * * 5` + keep-alive |
 
+### 各源 API key 申请难度
+
+整套方案**只有一个 key 值得现在去办**（NCBI），其余全部免注册或可无 key 运行。
+
+| 源 | 需要 key | 申请难度 | 无 key 限额 |
+| --- | --- | --- | --- |
+| OpenAlex | 否 | — | 10 万/天，带 mailto 进 polite pool |
+| Europe PMC | 否 | — | 无硬性限额，礼貌调用即可 |
+| Crossref | 否 | — | 带 mailto 进 polite pool |
+| Unpaywall | 否（URL 带 email 参数） | — | 10 万/天 |
+| PubMed E-utilities | 可选 | **极易**：NCBI 账号设置里自助生成，即时生效 | 3 req/s（有 key 提到 10 req/s） |
+| Semantic Scholar | 可选 | **难**：拒免费邮箱、拒第三方应用、排队约 1 个月 | 5000/5min 共享池 |
+
+本项目每周跑一次、四个查询式源合计几百次请求，无 key 模式绰绰有余。**唯一建议现在办的是 NCBI key**：登录 NCBI 账号 → Account Settings → API Key Management，点一下即得。
+
 ---
 
 ## 7. 分阶段落地
@@ -230,6 +250,7 @@ MinerU 解析质量更好（尤其表格），但模型体积大、需要显著�
 ### P0 — 不下载 PDF 的完整闭环（约 1 周，解决 80% 痛点）
 
 - 接通 Zotero 云端语料，确认 `include_path` 选中三个分类树
+- 办一个 NCBI API key（自助，秒出）；其余源全走无 key 模式 + 指数退避
 - 实现检索式蒸馏 + 四个查询式检索器 + DOI 去重
 - 复用现有 reranker 排序，取 Top-N
 - LLM 仅基于摘要做结构化抽取
@@ -288,3 +309,4 @@ MinerU 解析质量更好（尤其表格），但模型体积大、需要显著�
 - [Europe PMC RESTful Web Service](https://europepmc.org/RestfulWebService)
 - [Elsevier 文本与数据挖掘政策](https://www.elsevier.com/about/policies-and-standards/text-and-data-mining)
 - [Elsevier TDM 常见问题](https://www.elsevier.com/about/policies-and-standards/text-and-data-mining/faq)
+- [Semantic Scholar API Release Notes（key 申请政策与限额）](https://github.com/allenai/s2-folks/blob/main/API_RELEASE_NOTES.md)
