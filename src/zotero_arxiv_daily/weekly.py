@@ -35,6 +35,7 @@ from zotero_arxiv_daily.quota import allocate_quota, take_by_quota
 from zotero_arxiv_daily.report import build_digest, render_email_html, render_markdown, render_web_html
 from zotero_arxiv_daily.reranker import get_reranker_cls
 from zotero_arxiv_daily.reranker.base import time_decay_weights
+from zotero_arxiv_daily.reranker.vector_cache import cached_similarity_matrix
 from zotero_arxiv_daily.retriever import get_query_retriever_cls
 from zotero_arxiv_daily.search.cluster import assign_clusters, load_or_build_clusters
 from zotero_arxiv_daily.search.profile import load_or_build_profiles
@@ -96,12 +97,37 @@ class WeeklyExecutor(Executor):
                 candidates.extend(found)
         return candidates
 
+    def _similarity(self, candidates, corpus):
+        """Similarity matrix, served from the vector cache when configured.
+
+        Caching is an optimisation: a reranker that cannot embed, or a cache
+        that cannot be used, falls back to the plain path rather than failing.
+        """
+        cache_rel = self.config.reranker.get("vector_cache")
+        if cache_rel:
+            model = str(
+                self.config.reranker.api.get("model")
+                if self.config.executor.reranker == "api"
+                else self.config.reranker.local.model
+            )
+            try:
+                return cached_similarity_matrix(
+                    self.reranker,
+                    candidates,
+                    corpus,
+                    os.path.join(str(self.config.report.output_dir), str(cache_rel)),
+                    model,
+                )
+            except NotImplementedError as exc:
+                logger.info(f"Vector cache unavailable ({exc}); embedding the corpus this run")
+        return self.reranker.similarity_matrix(candidates, corpus)
+
     def _score_and_assign(self, candidates, corpus, clusters):
         """Score candidates and route them to a theme in one embedding pass."""
         order = sorted(range(len(corpus)), key=lambda i: corpus[i].added_date, reverse=True)
         ordered = [corpus[i] for i in order]
 
-        sim_sorted = self.reranker.similarity_matrix(candidates, ordered)
+        sim_sorted = self._similarity(candidates, ordered)
         scores = (sim_sorted * time_decay_weights(len(ordered))).sum(axis=1) * 10
         for score, paper in zip(scores, candidates):
             paper.score = float(score)
@@ -216,6 +242,9 @@ class WeeklyExecutor(Executor):
             cluster_cache_rel,
             profile_cache_rel,
         ]
+        vector_cache_rel = self.config.reranker.get("vector_cache")
+        if vector_cache_rel:
+            wanted.append(str(vector_cache_rel))
         if any(p.pdf_path for p in delivered) and self.config.git.get("include_pdfs", True):
             wanted.append(pdf_rel)
         staged = [rel for rel in (_stageable(w, root) for w in wanted) if rel]

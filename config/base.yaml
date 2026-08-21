@@ -43,6 +43,9 @@ llm:
   language: English # Preferred language for the TL;DR. Example: English
 
 reranker:
+  vector_cache: null # Cache the corpus embeddings between runs, e.g. state/corpus_vectors.npz.
+  # The corpus barely changes but the runner is ephemeral, so it is re-embedded every week
+  # (measured ~3.9 s/paper). Candidates are new each week and are never cached.
   local:
     model: jinaai/jina-embeddings-v5-text-nano-retrieval # The Hugging Face model name of the local embedding model. Example: jinaai/jina-embeddings-v5-text-nano
     encode_kwargs:

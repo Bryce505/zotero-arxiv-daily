@@ -381,3 +381,69 @@ def test_a_failed_send_does_not_mark_the_papers_as_delivered(weekly_config, stub
     seen_path = tmp_path / "seen.json"
     recorded = json.load(open(seen_path, encoding="utf-8")) if os.path.exists(seen_path) else []
     assert "10.1000/0" not in recorded
+
+
+def test_corpus_vectors_are_cached_between_runs(weekly_config, stubbed, monkeypatch, tmp_path):
+    """The corpus barely changes; re-embedding it every week is dead time."""
+    embedded: list[list[str]] = []
+
+    class EmbeddingReranker:
+        def __init__(self, config):
+            pass
+
+        def embed(self, texts):
+            embedded.append(list(texts))
+            return np.array([[float(len(t)), 1.0, 2.0] for t in texts])
+
+        def similarity_matrix(self, candidates, corpus):  # pragma: no cover
+            raise AssertionError("the cached path should be used")
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.get_reranker_cls", lambda name: EmbeddingReranker)
+    weekly_config.reranker.vector_cache = "state/corpus_vectors.npz"
+
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert (tmp_path / "state" / "corpus_vectors.npz").exists()
+    first_corpus = [t for batch in embedded for t in batch if t.startswith("Corpus abstract")]
+    assert len(first_corpus) == 6
+
+    embedded.clear()
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 28))
+    assert not [t for batch in embedded for t in batch if t.startswith("Corpus abstract")]
+
+
+def test_the_vector_cache_is_archived_with_the_other_artefacts(weekly_config, stubbed, monkeypatch):
+    class EmbeddingReranker:
+        def __init__(self, config):
+            pass
+
+        def embed(self, texts):
+            return np.array([[float(len(t)), 1.0, 2.0] for t in texts])
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.get_reranker_cls", lambda name: EmbeddingReranker)
+    weekly_config.reranker.vector_cache = "state/corpus_vectors.npz"
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert "state/corpus_vectors.npz" in stubbed["committed"][0]
+
+
+def test_caching_is_off_by_default_and_uses_the_plain_path(weekly_config, stubbed):
+    """Without vector_cache set, behaviour is exactly as before."""
+    assert weekly_config.reranker.get("vector_cache") is None
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert digest is not None
+
+
+def test_a_reranker_without_embed_falls_back_instead_of_failing(weekly_config, stubbed, monkeypatch):
+    """Caching is an optimisation; it must never break a working reranker."""
+
+    class NoEmbedReranker:
+        def __init__(self, config):
+            pass
+
+        def similarity_matrix(self, candidates, corpus):
+            values = np.linspace(0.1, 0.9, len(candidates) * len(corpus))
+            return values.reshape(len(candidates), len(corpus))
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.get_reranker_cls", lambda name: NoEmbedReranker)
+    weekly_config.reranker.vector_cache = "state/corpus_vectors.npz"
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert digest is not None
