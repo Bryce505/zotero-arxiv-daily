@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional, TypeVar
-from datetime import datetime
+from datetime import date, datetime
 import re
 import tiktoken
 from openai import OpenAI
@@ -20,6 +20,20 @@ class Paper:
     tldr: Optional[str] = None
     affiliations: Optional[list[str]] = None
     score: Optional[float] = None
+    doi: Optional[str] = None
+    journal: Optional[str] = None
+    pub_date: Optional[date] = None
+    pdf_path: Optional[str] = None
+    oa_status: str = "unknown"
+    extraction: Optional[dict[str, str]] = None
+    cluster: Optional[str] = None
+    is_backfill: bool = False
+    cited_by_count: Optional[int] = None
+
+    @property
+    def doi_url(self) -> Optional[str]:
+        """Return the doi.org resolver link, or None when the DOI is unknown."""
+        return f"https://doi.org/{self.doi}" if self.doi else None
 
     def _generate_tldr_with_llm(self, openai_client:OpenAI,llm_params:dict) -> str:
         lang = llm_params.get('language', 'English')
