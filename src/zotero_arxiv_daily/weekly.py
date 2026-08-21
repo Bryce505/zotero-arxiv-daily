@@ -62,6 +62,8 @@ def attachment_candidates(digest, limit: int) -> list[str]:
     seen = {id(p) for p in ordered}
     rest = [p for _, papers in digest.clusters for p in papers if id(p) not in seen]
     ordered.extend(sorted(rest, key=lambda p: -(p.score or 0.0)))
+    # A thin week is mostly backfill; attaching nothing would be perverse.
+    ordered.extend(p for p in digest.backfill if id(p) not in seen)
     return [p.pdf_path for p in ordered if p.pdf_path][:limit]
 
 
@@ -137,7 +139,9 @@ class WeeklyExecutor(Executor):
         # Anything already in the library, or already delivered in an earlier
         # week, is noise rather than a recommendation (spec 8.5).
         already_held = corpus_doi_set(corpus)
-        seen = load_seen(self.config.search.seen_state)
+        root = str(self.config.report.output_dir)
+        seen_rel = str(self.config.search.seen_state)
+        seen = load_seen(os.path.join(root, seen_rel))
         exclude = seen | already_held
         candidates = drop_seen(dedup_papers(self._search_all(profiles, start, end)), exclude)
         logger.info(
@@ -171,7 +175,6 @@ class WeeklyExecutor(Executor):
             logger.warning("No papers to deliver this week")
             return None
 
-        root = str(self.config.report.output_dir)
         pdf_rel = library_dir(anchor)
         download_fulltext(delivered, self.config, os.path.join(root, pdf_rel))
 
@@ -183,7 +186,6 @@ class WeeklyExecutor(Executor):
         md_path = write_text(os.path.join(root, md_rel), render_markdown(digest, fields))
         html_path = write_text(os.path.join(root, html_rel), render_web_html(digest, fields))
 
-        seen_rel = str(self.config.search.seen_state)
         save_seen(
             os.path.join(root, seen_rel),
             seen | {d for d in (normalize_doi(p.doi) for p in delivered) if d},
@@ -191,7 +193,15 @@ class WeeklyExecutor(Executor):
 
         # Paths are staged relative to *root*, which is also where git runs, so
         # a non-default output_dir still archives.
-        wanted = [md_rel, html_rel, seen_rel]
+        # The runner is ephemeral, so an uncommitted cache is no cache: without
+        # these the LLM re-clusters every week and the theme names drift.
+        wanted = [
+            md_rel,
+            html_rel,
+            seen_rel,
+            str(self.config.search.cluster_cache),
+            str(self.config.search.profile_cache),
+        ]
         if any(p.pdf_path for p in delivered) and self.config.git.get("include_pdfs", True):
             wanted.append(pdf_rel)
         staged = [rel for rel in (_stageable(w, root) for w in wanted) if rel]

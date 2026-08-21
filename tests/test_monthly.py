@@ -148,3 +148,34 @@ def test_model_output_is_escaped_before_it_reaches_the_email_body(tmp_path, monk
     _, _, html, _ = sent[0]
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+def test_the_synthesis_is_committed_from_the_output_root(tmp_path, monkeypatch):
+    """git add must run where the artefacts were written."""
+    calls = []
+    seed_reports(tmp_path, ["2026-08-W1.md"])
+    monkeypatch.setattr("zotero_arxiv_daily.monthly.OpenAI", lambda **kw: stub_client())
+    monkeypatch.setattr("zotero_arxiv_daily.monthly.send_digest", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.monthly.git_commit_paths",
+        lambda paths, message, config, cwd=".": calls.append((paths, cwd)) or True,
+    )
+    MonthlyExecutor(make_config(tmp_path)).run(anchor=date(2026, 8, 31))
+    paths, cwd = calls[0]
+    assert cwd == str(tmp_path)
+    assert all(not p.startswith("/") for p in paths)
+
+
+def test_the_synthesis_anchor_covers_a_fifth_friday(tmp_path, stub_monthly):
+    """October 2026's fifth Friday is the 30th; a run on the 28th misses it."""
+    from zotero_arxiv_daily.monthly import synthesis_anchor
+
+    # Fired on 2026-11-01, the anchor must land inside October.
+    anchor = synthesis_anchor(date(2026, 11, 1))
+    assert anchor.year == 2026 and anchor.month == 10
+    assert anchor.day >= 30
+
+    seed_reports(tmp_path, ["2026-10-W5.md"])
+    path = MonthlyExecutor(make_config(tmp_path)).run(anchor=anchor)
+    assert path is not None
+    assert (tmp_path / "reports" / "2026" / "2026-10-monthly.md").exists()

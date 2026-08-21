@@ -66,3 +66,38 @@ def test_every_query_source_named_in_search_has_a_config_block(env):
     cfg = compose_config()
     for source in cfg.search.sources:
         assert source in cfg.source, f"{source} is searched but has no config block"
+
+
+def test_recipients_secret_reaches_the_mailer(monkeypatch):
+    """weekly.yml exports RECIPIENTS; something has to read it."""
+    monkeypatch.setenv("RECIPIENTS", "a@corp.com, b@corp.com")
+    assert compose_config().email.recipients == "a@corp.com, b@corp.com"
+
+
+def test_recipients_resolve_without_the_legacy_receiver_secret(monkeypatch):
+    """The weekly workflow exports no RECEIVER; resolving must not explode."""
+    from zotero_arxiv_daily.mailer import resolve_recipients
+
+    monkeypatch.delenv("RECEIVER", raising=False)
+    monkeypatch.setenv("RECIPIENTS", "a@corp.com, b@corp.com")
+    GlobalHydra.instance().clear()
+    with initialize_config_dir(config_dir=CONFIG_DIR, version_base=None):
+        cfg = compose(
+            config_name="default",
+            overrides=[o for o in BASE_OVERRIDES if not o.startswith("email.receiver")],
+        )
+    assert resolve_recipients(cfg.email) == ["a@corp.com", "b@corp.com"]
+
+
+def test_an_unresolvable_receiver_is_treated_as_absent(monkeypatch):
+    from zotero_arxiv_daily.mailer import resolve_recipients
+
+    monkeypatch.delenv("RECEIVER", raising=False)
+    monkeypatch.delenv("RECIPIENTS", raising=False)
+    GlobalHydra.instance().clear()
+    with initialize_config_dir(config_dir=CONFIG_DIR, version_base=None):
+        cfg = compose(
+            config_name="default",
+            overrides=[o for o in BASE_OVERRIDES if not o.startswith("email.receiver")],
+        )
+    assert resolve_recipients(cfg.email) == []

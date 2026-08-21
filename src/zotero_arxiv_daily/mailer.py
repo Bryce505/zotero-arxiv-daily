@@ -18,6 +18,20 @@ MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 _ADDRESS_SEPARATOR_RE = re.compile(r"[,;\s]+")
 
 
+def _safe_get(config, key: str):
+    """Read *key*, treating an unresolvable interpolation as absent.
+
+    ``receiver`` interpolates a secret the weekly workflow does not export,
+    and an unset environment variable must not abort delivery at the last
+    step.
+    """
+    try:
+        return config.get(key)
+    except Exception as exc:  # noqa: BLE001 - OmegaConf interpolation failure
+        logger.debug(f"email.{key} could not be resolved ({exc}); treating it as unset")
+        return None
+
+
 def resolve_recipients(email_config) -> list[str]:
     """Normalise the configured recipients into a list of addresses.
 
@@ -25,7 +39,7 @@ def resolve_recipients(email_config) -> list[str]:
     can only hold a string.  Falls back to the single ``receiver`` so an
     existing daily-digest configuration keeps working untouched.
     """
-    raw = email_config.get("recipients")
+    raw = _safe_get(email_config, "recipients")
     if isinstance(raw, str):
         candidates = _ADDRESS_SEPARATOR_RE.split(raw)
     elif raw:
@@ -35,7 +49,7 @@ def resolve_recipients(email_config) -> list[str]:
 
     recipients = [c.strip() for c in candidates if c and c.strip()]
     if not recipients:
-        fallback = email_config.get("receiver")
+        fallback = _safe_get(email_config, "receiver")
         if fallback:
             recipients = [str(fallback).strip()]
     return recipients

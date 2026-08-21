@@ -3,8 +3,9 @@ name: CMC literature monthly synthesis
 on:
   workflow_dispatch:
   schedule:
-    # 13:00 UTC on the 28th = 21:00 Asia/Shanghai, after the month's last Friday digest
-    - cron: '0 13 28 * *'
+    # 13:00 UTC on the 1st = 21:00 Asia/Shanghai, synthesising the month just
+    # ended. Running mid-month would miss a fifth Friday landing on the 29th-31st.
+    - cron: '0 13 1 * *'
 
 permissions:
   contents: write

@@ -8,7 +8,7 @@ fails, the weekly digest is untouched.
 
 import os
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from html import escape
 
 import hydra
@@ -22,6 +22,15 @@ from zotero_arxiv_daily.utils import truncate_for_prompt
 
 _WEEK_FILE_RE = re.compile(r"^(\d{4})-(\d{2})-W\d+\.md$")
 _MAX_REPORT_TOKENS = 4000
+
+
+def synthesis_anchor(today: date) -> date:
+    """Return a date inside the most recently completed month.
+
+    A month whose last Friday falls on the 29th-31st only finishes at the
+    month boundary, so the synthesis runs afterwards and looks back.
+    """
+    return today.replace(day=1) - timedelta(days=1)
 
 
 def collect_month_reports(root: str, year: int, month: int) -> list[tuple[str, str]]:
@@ -92,7 +101,12 @@ class MonthlyExecutor:
         label = f"{anchor:%Y-%m}"
         rel = f"reports/{anchor.year}/{label}-monthly.md"
         path = write_text(f"{root}/{rel}", f"# CMC 文献月度综述 {label}\n\n{text}\n")
-        git_commit_paths([rel], f"docs: add CMC literature monthly synthesis {label}", self.config)
+        git_commit_paths(
+            [rel],
+            f"docs: add CMC literature monthly synthesis {label}",
+            self.config,
+            cwd=root,
+        )
 
         send_digest(
             self.config,
@@ -107,7 +121,7 @@ class MonthlyExecutor:
 
 @hydra.main(version_base=None, config_path="../../config", config_name="default")
 def main(config: DictConfig) -> None:
-    MonthlyExecutor(config).run()
+    MonthlyExecutor(config).run(anchor=synthesis_anchor(datetime.now().date()))
 
 
 if __name__ == "__main__":

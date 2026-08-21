@@ -313,3 +313,41 @@ def test_artefacts_are_committed_relative_to_the_output_root(weekly_config, stub
     staged = stubbed["committed"][0]
     for path in staged:
         assert not path.startswith("/"), f"{path} is absolute; git would not resolve it"
+
+
+def test_the_derived_caches_are_archived_so_themes_stay_stable(weekly_config, stubbed):
+    """Actions runners are ephemeral: an uncommitted cache is no cache.
+
+    Without it the LLM re-clusters every week and the section headings —
+    and the quota allocation behind them — drift.
+    """
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    staged = stubbed["committed"][0]
+    assert any("clusters.json" in p for p in staged)
+    assert any("profiles.json" in p for p in staged)
+
+
+def test_seen_state_is_read_from_where_it_was_written(weekly_config, stubbed, tmp_path):
+    """A relative seen_state under a non-default output_dir must round-trip."""
+    weekly_config.search.seen_state = "state/seen_dois.json"
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert (tmp_path / "state" / "seen_dois.json").exists()
+
+    second = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 28))
+    assert second is None or all(
+        p.doi != "10.1000/0" for _, papers in second.clusters for p in papers
+    )
+
+
+def test_backfilled_papers_can_be_attached_too():
+    """A thin week is mostly backfill; attaching nothing would be wrong."""
+    from zotero_arxiv_daily.report import build_digest
+    from zotero_arxiv_daily.weekly import attachment_candidates
+
+    fresh = make_candidate(0)
+    fresh.score, fresh.cluster, fresh.pdf_path = 9.0, "c", "/tmp/fresh.pdf"
+    classic = make_candidate(1)
+    classic.score, classic.cluster, classic.pdf_path = 5.0, "c", "/tmp/classic.pdf"
+    classic.is_backfill, classic.cited_by_count = True, 900
+    digest = build_digest([fresh], [classic], date(2026, 8, 21), top_n=1)
+    assert attachment_candidates(digest, 5) == ["/tmp/fresh.pdf", "/tmp/classic.pdf"]
