@@ -21,7 +21,7 @@
 
 ---
 
-## 2. 十个关键发现
+## 2. 十一个关键发现
 
 ### 发现 1 — Google Drive 这一层可以完全去掉 【大幅简化】
 
@@ -90,11 +90,12 @@ MinerU 解析质量更好（尤其表格），但模型体积大、需要显著�
 
 ### 发现 8 — 邮件通道要改三处，仓库私有化有连带影响 【需改造】
 
-现有 `utils.py:send_email` 是单收件人、纯 HTML、无附件、主题写死 `Daily arXiv`。要改：
+现有 `utils.py:send_email` 是单收件人、单一 HTML 正文、无附件、主题写死 `Daily arXiv`。要改：
 
 - 多收件人：`sendmail(sender, [列表])`，组员邮箱建议放 **Bcc** 互相隐藏
 - 改 `MIMEMultipart` 挂 PDF 附件
 - **大小护栏**：多数 SMTP 上限 20–25MB，超了就只发链接不发附件
+- 正文本身的排版能做到什么程度、以及为什么要另出一份网页 HTML，见**发现 11**
 
 **连带约束：** 存 PDF 就必须把仓库设为私有。私有仓 Actions 有 2000 分钟/月免费额度，周跑一次约 10–20 分钟即约 80 分钟/月，够用。**但私有仓里的 PDF 链接，组员必须是仓库 collaborator 才打得开** —— 要么把组员加为协作者，要么邮件直接发附件、报告里只放 DOI 链接。这个取舍要先定。
 
@@ -134,6 +135,46 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 若仍要接，按发现 10 的 IMAP 路径，不要爬网页（无公开 API，用户协议大概率禁止批量抓取，且 runner 为境外 IP）。
 
 > 注：本节撰写时会话出口代理屏蔽了 `x-mol.com`，**其 robots.txt 与是否提供官方 RSS 未能实测**，请自行在浏览器确认。若确有官方 RSS，接入成本很低 —— 仓库的 `arxiv_retriever.py` 已用 feedparser 处理 RSS，照抄一个检索器即可；但是否值得接，仍回到上面的判断。
+
+### 发现 11 — 三层输出：邮件 HTML 与网页 HTML 是两种东西 【产物设计】
+
+**现状先澄清：仓库已经在发 HTML 邮件了。** `utils.py:send_email` 走的是 `MIMEText(html, 'html', 'utf-8')`，`construct_email.py` 拼的是 table 布局的 HTML 卡片。所以「能不能发 HTML」不是问题，问题是**能不能做得好看**。
+
+而这里有条硬边界：**邮件 HTML 用不了网页 HTML 的任何现代手段。**
+
+| 网页里用的 | 邮件里的下场 |
+| --- | --- |
+| Google Fonts / `@font-face` | Gmail 直接剥掉；Outlook Windows、Outlook.com、Yahoo 同样。只能用系统字体 + 回退栈 |
+| CSS 变量 `:root { --teal: … }` | 完全无效。颜色须硬编码十六进制，并**内联到每个元素**（多数客户端剥 `<style>` 块） |
+| flexbox / grid / `max-width` | Outlook 桌面版用 Word 渲染引擎，全不支持。须回到 table 布局 + MSO 条件注释 |
+| `@media (prefers-color-scheme: dark)` | 支持零散，且 Gmail / Outlook 自带暗色反转，可能破坏配色 |
+
+> 微软 2026 年 10 月停止支持 Word 引擎版 Outlook，但企业环境更新滞后，未来一两年仍需兼容。
+
+最实际的坑是 **Gmail 超过 102KB 即裁剪**，显示 `[Message clipped]`，其后内容全部不可见。18–25 篇 × 8 个结构化字段极易超限。**因此邮件正文必须是摘要式，不是全文式。**
+
+另一个必须先知道的事实：**GitHub 不渲染仓库内的 `.html` 文件**，点开只显示源码。想在浏览器里看得靠 GitHub Pages —— 但**私有仓的 Pages 私有发布需要 Enterprise Cloud**，免费 / Pro 账号下私有仓的 Pages 只能设为公开，与「存 PDF 必须私有仓」（发现 8）直接冲突。
+
+综合以上，产物设计为**三层，同一份抽取数据渲染三次**：
+
+| 产物 | 位置 | 用途 | 样式约束 |
+| --- | --- | --- | --- |
+| `2026-08-W3.md` | 仓库 | 归档、diff、grep、GitHub 上直接看 | GitHub 原生渲染，无需操心 |
+| `2026-08-W3.html` | 仓库 **+ 邮件附件** | 精读 | **不受限**，可照搬本文档那套：Google Fonts、CSS 变量、深浅色三态 |
+| 邮件正文 HTML | 邮件 | 收件箱内分诊 | 受限：table 布局、内联样式、系统字体、压在 102KB 内 |
+
+**关键架构点：三者都从同一份抽取数据渲染，不要用 markdown 转 HTML。** `report.py` 里一个 `render(papers, template)` 配三个模板即可；markdown 转 HTML 会让两边的排版能力互相迁就，两头都不讨好。
+
+**邮件正文的内容取舍**（这是本条的核心）：
+
+- 头部：本周 N 篇、覆盖期、理化 / 表征 / 活性各几篇
+- **本周优先读的 3 篇** —— 标题 + 一句话 + 相关度
+- 其余按分类只列**标题 + DOI 链接**，不放全部结构化字段
+- 底部：完整版见附件 HTML / 仓库链接
+
+如此正文稳定在 20–30KB，远低于裁剪线；且收件箱扫一眼即可判断本周是否值得展开 —— 正是「快速阅读掌握最新动态」这一原始诉求。
+
+**私有仓下 HTML 附件比仓库链接更实用**：组员点开附件即在浏览器中得到完整样式，无需是仓库 collaborator，也绕开了 Pages 的私有发布限制。
 
 ---
 
@@ -192,10 +233,13 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
    标题 / DOI / 摘要 / 背景 / 待解决问题 / 方法 / 结论 / 洞见
    增删字段只改 YAML，不动代码 —— 这就是「输出内容可定制化」
         ↓
-⑧ 渲染 · 入库 · 群发                                        [新增 + 改造]
-   渲染 reports/2026/2026-08-W3.md，按 理化/表征/活性 分三段
+⑧ 三层渲染 · 入库 · 群发                                    [新增 + 改造]
+   同一份数据渲染三次（见发现 11）：
+     · reports/2026/2026-08-W3.md    → 仓库归档，按 理化/表征/活性 分三段
+     · reports/2026/2026-08-W3.html  → 仓库 + 邮件附件，样式不受限
+     · 邮件正文 HTML                  → 摘要式，table 布局，压在 102KB 内
    git commit & push 入库
-   SMTP 多收件人发 HTML 正文 + PDF 附件（带大小护栏）
+   SMTP 多收件人发正文 + HTML 附件 + PDF 附件（带大小护栏）
 ```
 
 ---
@@ -217,7 +261,7 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 | Paper 数据类 | `protocol.py:Paper` | **扩展字段**：doi / journal / pub_date / pdf_path / oa_status / extraction |
 | 流水线编排 | `executor.py:Executor.run` | **扩展**：插入阶段 ④⑥⑦⑧ |
 | 邮件发送 | `utils.py:send_email` | **改造**：多收件人 + Bcc + 附件 + 大小护栏 |
-| 邮件 HTML | `construct_email.py` | 改造：补 DOI / 期刊 / 结构化字段 / 仓库链接 |
+| 邮件 HTML | `construct_email.py` | 改造为**摘要式**正文：优先读 3 篇 + 分类标题列表 + DOI 链接，压在 102KB 内 |
 | 定时 workflow | `.github/workflows/` | 新增 `weekly.yml`，`0 12 * * 5` + `permissions: contents: write` |
 | 防停用 | `.github/workflows/keep-alive.yml` | **保留**（防 60 天无活动被停） |
 | 测试范式 | `tests/` 纯 Python stub | 沿用，新检索器照 `tests/retriever/` 的写法加 |
@@ -229,7 +273,7 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 - `dedup.py` — DOI 归一去重
 - `fulltext/resolver.py` — OA 全文阶梯
 - `extract.py` — 结构化抽取
-- `report.py` — 周报渲染与周命名
+- `report.py` — 周命名 + `render(papers, template)`，三个模板：markdown / 网页 HTML / 邮件 HTML
 - `publish.py` — 提交入库
 
 ---
@@ -259,6 +303,9 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 | 周报入库 GitHub | **高** | 需 `contents: write` | 采用 |
 | PDF 入库 GitHub | 中 | 须私有仓；组员需协作者权限；仅限 OA | 有条件采用 |
 | 多人邮件 + 附件 | **高** | SMTP 20–25MB 上限 | 采用 + 大小护栏 |
+| 邮件正文精美排版 | 中 | Gmail 剥字体、Outlook 用 Word 引擎、102KB 裁剪 | 摘要式 + table 布局 + 内联样式 |
+| 周报 HTML 入库 | **高** | GitHub 不渲染仓库内 `.html` | 采用，主要经**邮件附件**交付 |
+| GitHub Pages 渲染周报 | 低（私有仓） | 私有仓 Pages 私有发布需 Enterprise Cloud | 私有仓不采用；仓库转公开后可启用 |
 | 周五 20:00 定时 | **高** | cron 为 UTC；高峰延迟；60 天停用 | `0 12 * * 5` + keep-alive |
 
 ### 各源 API key 申请难度
@@ -298,10 +345,13 @@ X-MOL 收录 10,000+ 期刊，几乎覆盖 SCIE / ESCI / SSCI / AHCI / EI 全部
 - 命中全文的走全文抽取，未命中标注「仅摘要」
 - 报告末尾附「需人工取全文」清单 + 上图代理深链
 
-### P2 — 群发（约 1–2 天）
+### P2 — 三层渲染与群发（约 2–3 天）
 
+- 拆出 `render(papers, template)`，三个模板：markdown / 网页 HTML / 邮件 HTML
+- 网页 HTML 入库 `reports/`，样式照搬本文档那套（Google Fonts、CSS 变量、深浅色）
+- 邮件正文改摘要式：优先读的 3 篇 + 分类标题列表，压在 102KB 内
 - 多收件人 + Bcc 隐藏组员邮箱
-- MIMEMultipart 挂 PDF 附件 + 20MB 护栏
+- MIMEMultipart 挂 HTML 附件 + PDF 附件 + 20MB 护栏
 - 主题模板化：`CMC 文献周报 2026-08-W3（共 18 篇）`
 
 ### P3 — 可定制化与分组（约 2–3 天）
