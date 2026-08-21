@@ -118,8 +118,8 @@ class WeeklyExecutor(Executor):
                     os.path.join(str(self.config.report.output_dir), str(cache_rel)),
                     model,
                 )
-            except NotImplementedError as exc:
-                logger.info(f"Vector cache unavailable ({exc}); embedding the corpus this run")
+            except Exception as exc:  # noqa: BLE001 - an optimisation must never cost the digest
+                logger.warning(f"Vector cache unusable ({exc}); embedding the corpus this run")
         return self.reranker.similarity_matrix(candidates, corpus)
 
     def _score_and_assign(self, candidates, corpus, clusters):

@@ -447,3 +447,26 @@ def test_a_reranker_without_embed_falls_back_instead_of_failing(weekly_config, s
     weekly_config.reranker.vector_cache = "state/corpus_vectors.npz"
     digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
     assert digest is not None
+
+
+def test_an_unusable_vector_cache_falls_back_instead_of_failing(weekly_config, stubbed, monkeypatch, tmp_path):
+    """A cache whose vectors no longer match must not cost the week its digest."""
+
+    class BrokenCacheReranker:
+        def __init__(self, config):
+            self.calls = 0
+
+        def embed(self, texts):
+            # Returns a different width each call, so stacking the cache fails.
+            self.calls += 1
+            width = 3 if self.calls == 1 else 5
+            return np.array([[float(len(t))] * width for t in texts])
+
+        def similarity_matrix(self, candidates, corpus):
+            values = np.linspace(0.1, 0.9, len(candidates) * len(corpus))
+            return values.reshape(len(candidates), len(corpus))
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.get_reranker_cls", lambda name: BrokenCacheReranker)
+    weekly_config.reranker.vector_cache = "state/corpus_vectors.npz"
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert digest is not None

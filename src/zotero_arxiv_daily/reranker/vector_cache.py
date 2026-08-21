@@ -19,6 +19,11 @@ from ..protocol import CorpusPaper, Paper
 _MODEL_KEY = "__model__"
 
 
+def _cache_path(path: str) -> str:
+    """numpy.savez_compressed appends .npz; load must look in the same place."""
+    return path if path.endswith(".npz") else path + ".npz"
+
+
 def _text_key(text: str) -> str:
     """A filesystem- and npz-safe key for an abstract of arbitrary length."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -30,6 +35,7 @@ def load_vectors(path: str, model: str) -> dict[str, np.ndarray]:
     A cache built by a different embedding model is discarded: its vectors
     live in another space and mixing them would silently corrupt every score.
     """
+    path = _cache_path(path)
     if not os.path.exists(path):
         return {}
     try:
@@ -46,6 +52,7 @@ def load_vectors(path: str, model: str) -> dict[str, np.ndarray]:
 
 def save_vectors(path: str, model: str, vectors: dict[str, np.ndarray]) -> None:
     """Write *vectors* alongside the model that produced them."""
+    path = _cache_path(path)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     np.savez_compressed(path, **{_MODEL_KEY: np.array(model), **vectors})
 

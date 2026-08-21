@@ -170,3 +170,10 @@ def test_a_reranker_without_embed_support_is_rejected(tmp_path):
         cached_similarity_matrix(
             NoEmbed(), make_candidates(1), make_corpus(1), str(tmp_path / "v.npz"), "m"
         )
+
+
+def test_a_cache_path_without_the_npz_extension_still_round_trips(tmp_path):
+    """numpy appends .npz on save; loading must look in the same place."""
+    path = str(tmp_path / "vectors")
+    save_vectors(path, "model-x", {"a": np.array([1.0, 2.0])})
+    assert set(load_vectors(path, "model-x")) == {"a"}

@@ -49,7 +49,7 @@ def sample_digest():
 def test_digest_carries_the_week_label_and_window():
     digest = sample_digest()
     assert digest.label == "2026-08-W3"
-    assert digest.start == date(2026, 8, 15)
+    assert digest.start == date(2026, 8, 14)  # windows overlap by a day
     assert digest.end == date(2026, 8, 21)
 
 
@@ -81,7 +81,7 @@ def test_closed_access_papers_are_listed_for_manual_retrieval():
 def test_markdown_contains_the_label_window_and_every_paper():
     text = render_markdown(sample_digest(), FIELDS)
     assert "2026-08-W3" in text
-    assert "2026-08-15" in text and "2026-08-21" in text
+    assert "2026-08-14" in text and "2026-08-21" in text
     for title in ("alpha", "beta", "gamma", "classic"):
         assert title in text
 

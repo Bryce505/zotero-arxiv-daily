@@ -35,12 +35,24 @@ def test_label_uses_the_month_the_friday_falls_in():
     assert week_label(date(2026, 10, 2)) == "2026-10-W1"
 
 
-def test_window_is_the_seven_days_ending_on_the_friday():
-    assert week_window(date(2026, 8, 21)) == (date(2026, 8, 15), date(2026, 8, 21))
+def test_window_reaches_back_to_the_previous_friday():
+    """Windows overlap by a day on purpose.
+
+    The digest runs at 12:00 UTC on Friday; anything indexed later that day
+    would fall into no window at all if consecutive windows merely abutted.
+    seen_dois makes the overlap free of duplicates.
+    """
+    assert week_window(date(2026, 8, 21)) == (date(2026, 8, 14), date(2026, 8, 21))
+
+
+def test_consecutive_windows_overlap_rather_than_abut():
+    _, first_end = week_window(date(2026, 8, 14))
+    second_start, _ = week_window(date(2026, 8, 21))
+    assert second_start <= first_end
 
 
 def test_window_may_cross_a_month_boundary():
-    assert week_window(date(2026, 10, 2)) == (date(2026, 9, 26), date(2026, 10, 2))
+    assert week_window(date(2026, 10, 2)) == (date(2026, 9, 25), date(2026, 10, 2))
 
 
 def test_report_paths_are_year_foldered():
