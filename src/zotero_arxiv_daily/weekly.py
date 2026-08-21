@@ -7,6 +7,7 @@ open-access full text, extract the configured fields, then render, archive
 and send.
 """
 
+import os
 from datetime import date, datetime
 
 import hydra
@@ -16,7 +17,14 @@ from omegaconf import DictConfig
 from openai import OpenAI
 
 from zotero_arxiv_daily.backfill import backfill_papers
-from zotero_arxiv_daily.dedup import dedup_papers, drop_seen, load_seen, normalize_doi, save_seen
+from zotero_arxiv_daily.dedup import (
+    corpus_doi_set,
+    dedup_papers,
+    drop_seen,
+    load_seen,
+    normalize_doi,
+    save_seen,
+)
 from zotero_arxiv_daily.executor import Executor, normalize_path_patterns
 from zotero_arxiv_daily.extract import extract_all, load_field_specs
 from zotero_arxiv_daily.fulltext.resolver import download_fulltext
@@ -30,6 +38,31 @@ from zotero_arxiv_daily.retriever import get_query_retriever_cls
 from zotero_arxiv_daily.search.cluster import assign_clusters, load_or_build_clusters
 from zotero_arxiv_daily.search.profile import load_or_build_profiles
 from zotero_arxiv_daily.weeknum import library_dir, report_paths, week_label, week_window
+
+
+def _stageable(path: str, root: str) -> str | None:
+    """Return *path* relative to *root*, or None when it sits outside it.
+
+    git cannot stage a path outside the repository, so anything the operator
+    pointed elsewhere is written but not archived.
+    """
+    relative = os.path.relpath(os.path.join(root, path), root)
+    return None if relative.startswith(os.pardir) else relative
+
+
+def attachment_candidates(digest, limit: int) -> list[str]:
+    """PDF paths worth attaching, best first.
+
+    The top picks lead, then the rest of the digest by score, so a limit
+    larger than ``top_picks`` still finds papers to attach.
+    """
+    if limit <= 0:
+        return []
+    ordered = list(digest.top_picks)
+    seen = {id(p) for p in ordered}
+    rest = [p for _, papers in digest.clusters for p in papers if id(p) not in seen]
+    ordered.extend(sorted(rest, key=lambda p: -(p.score or 0.0)))
+    return [p.pdf_path for p in ordered if p.pdf_path][:limit]
 
 
 class WeeklyExecutor(Executor):
@@ -101,9 +134,16 @@ class WeeklyExecutor(Executor):
             self.config.llm,
         )
 
+        # Anything already in the library, or already delivered in an earlier
+        # week, is noise rather than a recommendation (spec 8.5).
+        already_held = corpus_doi_set(corpus)
         seen = load_seen(self.config.search.seen_state)
-        candidates = drop_seen(dedup_papers(self._search_all(profiles, start, end)), seen)
-        logger.info(f"{len(candidates)} candidates after de-duplication")
+        exclude = seen | already_held
+        candidates = drop_seen(dedup_papers(self._search_all(profiles, start, end)), exclude)
+        logger.info(
+            f"{len(candidates)} candidates after de-duplication "
+            f"({len(already_held)} library DOIs and {len(seen)} previously delivered DOIs excluded)"
+        )
 
         chosen = []
         if candidates:
@@ -119,12 +159,11 @@ class WeeklyExecutor(Executor):
         shortfall = int(self.config.report.min_papers) - len(chosen)
         backfill = []
         if shortfall > 0:
-            exclude = seen | {d for d in (normalize_doi(p.doi) for p in chosen) if d}
             backfill = backfill_papers(
                 profiles,
                 get_query_retriever_cls("openalex")(self.config),
                 shortfall,
-                exclude,
+                exclude | {d for d in (normalize_doi(p.doi) for p in chosen) if d},
             )
 
         delivered = chosen + backfill
@@ -132,30 +171,39 @@ class WeeklyExecutor(Executor):
             logger.warning("No papers to deliver this week")
             return None
 
-        root = self.config.report.output_dir
-        download_fulltext(delivered, self.config, f"{root}/{library_dir(anchor)}")
+        root = str(self.config.report.output_dir)
+        pdf_rel = library_dir(anchor)
+        download_fulltext(delivered, self.config, os.path.join(root, pdf_rel))
 
         fields = load_field_specs(self.config)
         extract_all(delivered, self.openai_client, self.config.llm, fields)
 
         digest = build_digest(chosen, backfill, anchor, int(self.config.report.top_picks))
         md_rel, html_rel = report_paths(anchor)
-        md_path = write_text(f"{root}/{md_rel}", render_markdown(digest, fields))
-        html_path = write_text(f"{root}/{html_rel}", render_web_html(digest, fields))
+        md_path = write_text(os.path.join(root, md_rel), render_markdown(digest, fields))
+        html_path = write_text(os.path.join(root, html_rel), render_web_html(digest, fields))
 
+        seen_rel = str(self.config.search.seen_state)
         save_seen(
-            self.config.search.seen_state,
+            os.path.join(root, seen_rel),
             seen | {d for d in (normalize_doi(p.doi) for p in delivered) if d},
         )
 
+        # Paths are staged relative to *root*, which is also where git runs, so
+        # a non-default output_dir still archives.
+        wanted = [md_rel, html_rel, seen_rel]
+        if any(p.pdf_path for p in delivered) and self.config.git.get("include_pdfs", True):
+            wanted.append(pdf_rel)
+        staged = [rel for rel in (_stageable(w, root) for w in wanted) if rel]
         git_commit_paths(
-            [md_rel, html_rel, self.config.search.seen_state],
+            staged,
             f"docs: add CMC literature digest {label}",
             self.config,
+            cwd=root,
         )
 
-        pdf_paths = [p.pdf_path for p in digest.top_picks if p.pdf_path]
-        attachments = select_attachments([html_path] + pdf_paths[: int(self.config.report.attach_pdfs)])
+        pdf_paths = attachment_candidates(digest, int(self.config.report.attach_pdfs))
+        attachments = select_attachments([html_path] + pdf_paths)
         send_digest(
             self.config,
             f"CMC 文献周报 {label}（共 {digest.total} 篇）",

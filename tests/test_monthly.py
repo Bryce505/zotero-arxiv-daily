@@ -132,3 +132,19 @@ def test_monthly_run_skips_delivery_when_synthesis_is_empty(tmp_path, monkeypatc
     monkeypatch.setattr("zotero_arxiv_daily.monthly.send_digest", lambda *a, **kw: sent.append(a))
     assert MonthlyExecutor(make_config(tmp_path)).run(anchor=date(2026, 8, 31)) is None
     assert sent == []
+
+
+def test_model_output_is_escaped_before_it_reaches_the_email_body(tmp_path, monkeypatch):
+    """Every other rendering path escapes; this one must not be the exception."""
+    sent = []
+    seed_reports(tmp_path, ["2026-08-W1.md"])
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.monthly.OpenAI",
+        lambda **kw: stub_client("综述 <script>alert(1)</script> 结束"),
+    )
+    monkeypatch.setattr("zotero_arxiv_daily.monthly.send_digest", lambda *a, **kw: sent.append(a))
+    monkeypatch.setattr("zotero_arxiv_daily.monthly.git_commit_paths", lambda *a, **kw: True)
+    MonthlyExecutor(make_config(tmp_path)).run(anchor=date(2026, 8, 31))
+    _, _, html, _ = sent[0]
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html

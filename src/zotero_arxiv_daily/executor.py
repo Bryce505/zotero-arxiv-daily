@@ -59,7 +59,8 @@ class Executor:
             title=c['data']['title'],
             abstract=c['data']['abstractNote'],
             added_date=datetime.strptime(c['data']['dateAdded'], '%Y-%m-%dT%H:%M:%SZ'),
-            paths=c['paths']
+            paths=c['paths'],
+            doi=c['data'].get('DOI') or None
         ) for c in corpus]
     
     def filter_corpus(self, corpus:list[CorpusPaper]) -> list[CorpusPaper]:

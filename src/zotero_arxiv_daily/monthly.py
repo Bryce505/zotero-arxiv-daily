@@ -9,6 +9,7 @@ fails, the weekly digest is untouched.
 import os
 import re
 from datetime import date, datetime
+from html import escape
 
 import hydra
 from loguru import logger
@@ -96,7 +97,8 @@ class MonthlyExecutor:
         send_digest(
             self.config,
             f"CMC 文献月度综述 {label}",
-            f'<div style="font-family:-apple-system,Arial,sans-serif;white-space:pre-wrap">{text}</div>',
+            '<div style="font-family:-apple-system,Arial,sans-serif;white-space:pre-wrap">'
+            f"{escape(text)}</div>",
             select_attachments([path]),
         )
         logger.info(f"Monthly synthesis {label} delivered, archived at {path}")

@@ -123,3 +123,4 @@ class CorpusPaper:
     abstract: str
     added_date: datetime
     paths: list[str]
+    doi: Optional[str] = None

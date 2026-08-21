@@ -13,6 +13,9 @@ from ..utils import http_get_with_retry
 from .query_base import BaseQueryRetriever, register_query_retriever
 
 _SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+# The rendered PDF, not the fullTextXML endpoint: the full-text ladder
+# rejects anything that is not actually a PDF.
+EPMC_PDF_URL = "https://europepmc.org/articles/{pmcid}?pdf=render"
 
 
 @register_query_retriever("europepmc")
@@ -41,11 +44,7 @@ class EuropepmcRetriever(BaseQueryRetriever):
             journal=item.get("journalTitle"),
             pub_date=self._parse_date(item.get("firstPublicationDate")),
             oa_status="open" if is_open else "closed",
-            pdf_url=(
-                f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextXML"
-                if pmcid and is_open
-                else None
-            ),
+            pdf_url=EPMC_PDF_URL.format(pmcid=pmcid) if pmcid and is_open else None,
         )
 
     def search(self, query: str, start: date, end: date, limit: int) -> list[Paper]:

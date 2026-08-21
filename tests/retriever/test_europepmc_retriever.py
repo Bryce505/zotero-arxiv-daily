@@ -99,3 +99,22 @@ def test_europepmc_survives_a_transport_failure(config, monkeypatch):
     monkeypatch.setattr(requests, "get", _boom)
     monkeypatch.setattr("zotero_arxiv_daily.utils.sleep", lambda _: None)
     assert EuropepmcRetriever(config).search("HCP", date(2026, 8, 15), date(2026, 8, 21), 20) == []
+
+
+def test_open_access_records_expose_a_real_pdf_url(config, mock_epmc):
+    """The fullTextXML endpoint is not a PDF; the ladder would reject it."""
+    papers = EuropepmcRetriever(config).search("HCP", date(2026, 8, 15), date(2026, 8, 21), 20)
+    assert papers[0].pdf_url == "https://europepmc.org/articles/PMC1234567?pdf=render"
+
+
+def test_an_open_record_without_a_pmcid_has_no_pdf_url(config, monkeypatch):
+    no_pmc = {"resultList": {"result": [dict(RESPONSE["resultList"]["result"][0])]}}
+    no_pmc["resultList"]["result"][0].pop("pmcid")
+    monkeypatch.setattr(
+        requests, "get",
+        lambda url, **kw: SimpleNamespace(status_code=200, raise_for_status=lambda: None, json=lambda: no_pmc),
+    )
+    monkeypatch.setattr("zotero_arxiv_daily.utils.sleep", lambda _: None)
+    papers = EuropepmcRetriever(config).search("HCP", date(2026, 8, 15), date(2026, 8, 21), 20)
+    assert papers[0].pdf_url is None
+    assert papers[0].oa_status == "open"

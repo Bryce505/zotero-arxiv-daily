@@ -14,10 +14,11 @@ from dataclasses import dataclass
 from loguru import logger
 
 from ..protocol import Paper
+from ..retriever.europepmc_retriever import EPMC_PDF_URL
 from ..utils import extract_markdown_from_pdf, http_get_with_retry
 
 _UNPAYWALL = "https://api.unpaywall.org/v2/{doi}"
-_EPMC_PDF = "https://europepmc.org/api/fulltextRepo?pprId={doi}&type=FILE&fileName=main.pdf"
+_EPMC_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 _UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]")
 _PDF_MAGIC = b"%PDF"
 
@@ -59,6 +60,21 @@ def _unpaywall_pdf_url(doi: str, email: str) -> str | None:
     return location.get("url_for_pdf") or location.get("url")
 
 
+def _europepmc_pdf_url(doi: str) -> str | None:
+    """Resolve a DOI to its Europe PMC open-access PDF, if one exists."""
+    params = {"query": f'DOI:"{doi}"', "format": "json", "pageSize": 1, "resultType": "lite"}
+    try:
+        results = http_get_with_retry(_EPMC_SEARCH, params=params, retries=2).json()
+        hits = results.get("resultList", {}).get("result", [])
+    except Exception as exc:  # noqa: BLE001 - Europe PMC is best-effort
+        logger.debug(f"Europe PMC lookup failed for {doi}: {exc}")
+        return None
+    if not hits:
+        return None
+    pmcid = hits[0].get("pmcid")
+    return EPMC_PDF_URL.format(pmcid=pmcid) if pmcid else None
+
+
 def resolve_pdf(paper: Paper, config) -> FullTextResult:
     """Walk the OA ladder for *paper*, stopping at the first real PDF."""
     settings = config.fulltext
@@ -81,9 +97,11 @@ def resolve_pdf(paper: Paper, config) -> FullTextResult:
                 return FullTextResult(pdf_bytes=body, oa_status="open", source="unpaywall")
 
     if paper.doi:
-        body = _fetch_pdf(_EPMC_PDF.format(doi=paper.doi), max_bytes)
-        if body:
-            return FullTextResult(pdf_bytes=body, oa_status="open", source="europepmc")
+        url = _europepmc_pdf_url(paper.doi)
+        if url:
+            body = _fetch_pdf(url, max_bytes)
+            if body:
+                return FullTextResult(pdf_bytes=body, oa_status="open", source="europepmc")
 
     return FullTextResult(pdf_bytes=None, oa_status="closed")
 

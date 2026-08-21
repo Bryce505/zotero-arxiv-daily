@@ -12,6 +12,15 @@ source:
     category: null # The categories of target biorxiv papers. Find categories from [here](https://www.biorxiv.org/). Example: ["biochemistry","animal behavior and cognition"]
   medrxiv:
     category: null # The categories of target medrxiv papers. Find categories from [here](https://www.medrxiv.org/) Example: ["psychiatry and clinical psychology", "neurology"]
+  pubmed:
+    api_key: ${oc.env:NCBI_API_KEY,null}   # Optional NCBI key; lifts the rate limit from 3 to 10 req/s. Self-service, issued instantly.
+    email: ${oc.env:CONTACT_EMAIL,null}    # Contact address sent with E-utilities requests, per NCBI's usage policy.
+    tool: zotero-cmc-weekly               # Tool name sent with E-utilities requests.
+  crossref:
+    mailto: ${oc.env:CONTACT_EMAIL,null}   # Joins Crossref's polite pool: better latency, fewer throttles.
+  openalex:
+    mailto: ${oc.env:CONTACT_EMAIL,null}   # Joins OpenAlex's polite pool.
+  europepmc: {}                           # No credentials required.
   chemrxiv:
     include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
 
@@ -63,7 +72,7 @@ search:
 
 fulltext:
   enabled: true            # Whether to attempt open-access full-text retrieval.
-  unpaywall_email: null    # Contact address required by the Unpaywall API. Example: you@example.org
+  unpaywall_email: ${oc.env:CONTACT_EMAIL,null} # Required by the Unpaywall API; without it that rung of the ladder is skipped.
   max_bytes: 20000000      # Reject any single PDF larger than this.
 
 report:
@@ -84,4 +93,4 @@ git:
   enabled: true            # Whether to commit the artefacts back to the repository.
   user_name: zotero-cmc-weekly
   user_email: actions@github.com
-  branch: ''               # Leave empty to commit onto the checked-out branch.
+  include_pdfs: true       # Commit the week's downloaded PDFs too. Set false to keep the repository small.

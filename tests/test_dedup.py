@@ -105,3 +105,16 @@ def test_saved_seen_state_is_sorted_for_stable_diffs(tmp_path):
     save_seen(path, {"10.1000/c", "10.1000/a", "10.1000/b"})
     with open(path, encoding="utf-8") as handle:
         assert json.load(handle) == ["10.1000/a", "10.1000/b", "10.1000/c"]
+
+
+def test_corpus_doi_set_collects_normalised_dois_from_corpus_papers():
+    from zotero_arxiv_daily.dedup import corpus_doi_set
+    from zotero_arxiv_daily.protocol import CorpusPaper
+    from datetime import datetime
+
+    corpus = [
+        CorpusPaper(title="a", abstract="x", added_date=datetime(2026, 1, 1), paths=[], doi="https://doi.org/10.1016/A"),
+        CorpusPaper(title="b", abstract="x", added_date=datetime(2026, 1, 1), paths=[], doi=None),
+        CorpusPaper(title="c", abstract="x", added_date=datetime(2026, 1, 1), paths=[], doi="not-a-doi"),
+    ]
+    assert corpus_doi_set(corpus) == {"10.1016/a"}

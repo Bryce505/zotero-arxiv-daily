@@ -63,7 +63,7 @@ def weekly_config(config, tmp_path):
             }
         )
         config.git = OmegaConf.create(
-            {"enabled": False, "user_name": "b", "user_email": "b@e.org", "branch": ""}
+            {"enabled": False, "user_name": "b", "user_email": "b@e.org", "include_pdfs": True}
         )
         config.email.recipients = ["team@example.org"]
     return config
@@ -213,3 +213,103 @@ def test_an_empty_corpus_aborts_before_any_search(weekly_config, stubbed, monkey
     monkeypatch.setattr("zotero_arxiv_daily.weekly.WeeklyExecutor.fetch_zotero_corpus", lambda self: [])
     assert WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21)) is None
     assert stubbed["sent"] == []
+
+
+def test_papers_already_in_the_zotero_library_are_not_recommended(weekly_config, stubbed, monkeypatch):
+    """Spec 8.5: recommending something the user already collected is noise."""
+    corpus = make_corpus()
+    corpus[0].doi = "10.1000/1"
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.weekly.WeeklyExecutor.fetch_zotero_corpus", lambda self: corpus
+    )
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    delivered = [p.doi for _, papers in digest.clusters for p in papers]
+    assert "10.1000/1" not in delivered
+    assert sorted(delivered) == ["10.1000/0", "10.1000/2"]
+
+
+def test_attachment_candidates_reach_beyond_the_top_picks():
+    """attach_pdfs: 5 must not be silently capped at top_picks: 3."""
+    from zotero_arxiv_daily.report import build_digest
+    from zotero_arxiv_daily.weekly import attachment_candidates
+
+    papers = []
+    for i in range(6):
+        paper = make_candidate(i)
+        paper.score = float(10 - i)
+        paper.cluster = "c"
+        paper.pdf_path = f"/tmp/{i}.pdf"
+        papers.append(paper)
+    digest = build_digest(papers, [], date(2026, 8, 21), top_n=3)
+    assert attachment_candidates(digest, 5) == [f"/tmp/{i}.pdf" for i in range(5)]
+
+
+def test_attachment_candidates_lead_with_the_top_picks():
+    from zotero_arxiv_daily.report import build_digest
+    from zotero_arxiv_daily.weekly import attachment_candidates
+
+    papers = []
+    for i in range(4):
+        paper = make_candidate(i)
+        paper.score = float(i)  # ascending, so candidate 3 ranks first
+        paper.cluster = "c"
+        paper.pdf_path = f"/tmp/{i}.pdf"
+        papers.append(paper)
+    digest = build_digest(papers, [], date(2026, 8, 21), top_n=2)
+    assert attachment_candidates(digest, 2) == ["/tmp/3.pdf", "/tmp/2.pdf"]
+
+
+def test_attachment_candidates_skip_papers_without_a_pdf():
+    from zotero_arxiv_daily.report import build_digest
+    from zotero_arxiv_daily.weekly import attachment_candidates
+
+    with_pdf = make_candidate(0)
+    with_pdf.score, with_pdf.cluster, with_pdf.pdf_path = 9.0, "c", "/tmp/a.pdf"
+    without = make_candidate(1)
+    without.score, without.cluster = 8.0, "c"
+    digest = build_digest([with_pdf, without], [], date(2026, 8, 21), top_n=2)
+    assert attachment_candidates(digest, 5) == ["/tmp/a.pdf"]
+
+
+def test_downloaded_pdfs_are_staged_for_the_archive(weekly_config, stubbed, monkeypatch, tmp_path):
+    """The report promises the PDFs stay archived in the repository."""
+
+    def fake_download(papers, config, out_dir):
+        import os
+
+        os.makedirs(out_dir, exist_ok=True)
+        for i, paper in enumerate(papers):
+            path = os.path.join(out_dir, f"{i}.pdf")
+            with open(path, "wb") as handle:
+                handle.write(b"%PDF-1.7")
+            paper.pdf_path = path
+            paper.oa_status = "open"
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.download_fulltext", fake_download)
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    staged = stubbed["committed"][0]
+    assert any("library/2026/2026-08-W3" in p for p in staged)
+
+
+def test_pdfs_are_not_staged_when_the_operator_opts_out(weekly_config, stubbed, monkeypatch):
+    def fake_download(papers, config, out_dir):
+        import os
+
+        os.makedirs(out_dir, exist_ok=True)
+        for i, paper in enumerate(papers):
+            path = os.path.join(out_dir, f"{i}.pdf")
+            with open(path, "wb") as handle:
+                handle.write(b"%PDF-1.7")
+            paper.pdf_path = path
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.download_fulltext", fake_download)
+    weekly_config.git.include_pdfs = False
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert not any("library/" in p for p in stubbed["committed"][0])
+
+
+def test_artefacts_are_committed_relative_to_the_output_root(weekly_config, stubbed):
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    staged = stubbed["committed"][0]
+    for path in staged:
+        assert not path.startswith("/"), f"{path} is absolute; git would not resolve it"

@@ -12,7 +12,7 @@ import os
 import re
 from typing import Iterable
 
-from .protocol import Paper
+from .protocol import CorpusPaper, Paper  # noqa: F401
 
 _DOI_RE = re.compile(r"10\.\d{4,9}/\S+")
 _TITLE_NOISE_RE = re.compile(r"[^\w\s]", flags=re.UNICODE)
@@ -78,11 +78,11 @@ def save_seen(path: str, seen: set[str]) -> None:
         json.dump(sorted(seen), handle, indent=1, ensure_ascii=False)
 
 
-def corpus_doi_set(corpus_items: Iterable[dict]) -> set[str]:
-    """Collect normalised DOIs out of raw Zotero item dicts."""
+def corpus_doi_set(corpus: Iterable["CorpusPaper"]) -> set[str]:
+    """Collect the normalised DOIs already present in the Zotero library."""
     dois = set()
-    for item in corpus_items:
-        doi = normalize_doi(item.get("data", {}).get("DOI"))
+    for paper in corpus:
+        doi = normalize_doi(paper.doi)
         if doi:
             dois.add(doi)
     return dois

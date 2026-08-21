@@ -169,3 +169,46 @@ def test_a_failed_extraction_still_keeps_the_pdf(cfg, tmp_path, monkeypatch):
     download_fulltext(papers, cfg, str(tmp_path))
     assert papers[0].pdf_path is not None
     assert papers[0].full_text is None
+
+
+def test_europe_pmc_rung_looks_the_pmcid_up_by_doi(cfg, monkeypatch):
+    """A DOI is not a preprint id; the PMCID has to be resolved first."""
+    seen = []
+
+    def _patched(url, **kw):
+        seen.append((url, kw.get("params", {})))
+        if "unpaywall" in url:
+            return SimpleNamespace(
+                status_code=200, raise_for_status=lambda: None, json=lambda: {"best_oa_location": None}
+            )
+        if "europepmc.org/webservices" in url or "ebi.ac.uk" in url:
+            return SimpleNamespace(
+                status_code=200,
+                raise_for_status=lambda: None,
+                json=lambda: {"resultList": {"result": [{"pmcid": "PMC7654321", "isOpenAccess": "Y"}]}},
+            )
+        return pdf_response()
+
+    monkeypatch.setattr(requests, "get", _patched)
+    result = resolve_pdf(make_paper(doi="10.1016/j.chroma.2026.01.001"), cfg)
+    assert result.pdf_bytes == PDF_BYTES
+    assert result.source == "europepmc"
+    assert any("PMC7654321" in url for url, _ in seen)
+
+
+def test_the_europe_pmc_rung_is_skipped_when_no_pmcid_exists(cfg, monkeypatch):
+    def _patched(url, **kw):
+        if "unpaywall" in url:
+            return SimpleNamespace(
+                status_code=200, raise_for_status=lambda: None, json=lambda: {"best_oa_location": None}
+            )
+        if "ebi.ac.uk" in url:
+            return SimpleNamespace(
+                status_code=200, raise_for_status=lambda: None, json=lambda: {"resultList": {"result": []}}
+            )
+        raise AssertionError("no PDF fetch should be attempted without a PMCID")
+
+    monkeypatch.setattr(requests, "get", _patched)
+    result = resolve_pdf(make_paper(doi="10.1016/nope"), cfg)
+    assert result.pdf_bytes is None
+    assert result.oa_status == "closed"
