@@ -63,18 +63,28 @@ class Attachment:
     mime_subtype: str
 
 
+def _encoded_size(raw_bytes: int) -> int:
+    """Base64 size of *raw_bytes*: SMTP limits apply to the encoded message."""
+    return (raw_bytes + 2) // 3 * 4
+
+
 def select_attachments(paths: list[str], max_total_bytes: int = MAX_ATTACHMENT_BYTES) -> list[Attachment]:
-    """Read *paths* in order, keeping what fits under the ceiling."""
+    """Read *paths* in order, keeping what fits under the ceiling.
+
+    The ceiling is measured on the base64-encoded size, roughly 4/3 of the
+    bytes on disk, because that is what the provider counts.
+    """
     chosen: list[Attachment] = []
     used = 0
     for path in paths:
         if not os.path.exists(path):
             logger.warning(f"Attachment {path} is missing; skipping")
             continue
-        size = os.path.getsize(path)
+        size = _encoded_size(os.path.getsize(path))
         if used + size > max_total_bytes:
             logger.info(
-                f"Skipping attachment {os.path.basename(path)} ({size} bytes): would exceed the size ceiling"
+                f"Skipping attachment {os.path.basename(path)} ({size} bytes encoded): "
+                "would exceed the size ceiling"
             )
             continue
         with open(path, "rb") as handle:

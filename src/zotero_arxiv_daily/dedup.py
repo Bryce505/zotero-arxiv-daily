@@ -61,19 +61,28 @@ def dedup_papers(papers: list[Paper]) -> list[Paper]:
     kept: list[Paper] = []
     for paper in papers:
         doi = normalize_doi(paper.doi)
-        if doi is not None:
-            existing = by_doi.get(doi)
-            if existing is not None:
-                _merge_into(existing, paper)
-                continue
+        key = title_key(paper.title)
+
+        existing = by_doi.get(doi) if doi else None
+        if existing is None:
+            candidate = by_title.get(key)
+            # Match on title only when at least one side has no DOI: two
+            # different papers sharing a title must never be merged.
+            if candidate is not None:
+                other = normalize_doi(candidate.doi)
+                if other is None or doi is None or other == doi:
+                    existing = candidate
+
+        if existing is not None:
+            _merge_into(existing, paper)
+            if doi and normalize_doi(existing.doi) is None:
+                existing.doi = paper.doi
+                by_doi[doi] = existing
+            continue
+
+        if doi:
             by_doi[doi] = paper
-        else:
-            key = title_key(paper.title)
-            existing = by_title.get(key)
-            if existing is not None:
-                _merge_into(existing, paper)
-                continue
-            by_title[key] = paper
+        by_title.setdefault(key, paper)
         kept.append(paper)
     return kept
 

@@ -156,3 +156,22 @@ def test_an_empty_digest_still_renders():
     assert "2026-08-W3" in render_markdown(digest, FIELDS)
     assert "2026-08-W3" in render_email_html(digest, FIELDS)
     assert "2026-08-W3" in render_web_html(digest, FIELDS)
+
+
+def test_paywalled_backfill_is_listed_for_manual_retrieval():
+    """A thin week is mostly backfill: that is when the list matters most."""
+    classic = make_paper("classic", "c", 5.0, is_backfill=True, oa_status="closed", cited_by_count=900)
+    digest = build_digest([], [classic], date(2026, 8, 21), top_n=3)
+    assert [p.title for p in digest.needs_manual] == ["classic"]
+    assert "需人工取全文" in render_markdown(digest, FIELDS)
+
+
+def test_email_trimming_never_keeps_a_heading_without_its_papers():
+    papers = [make_paper(f"paper{i}", f"cluster{i % 12}", float(i)) for i in range(240)]
+    digest = build_digest(papers, [], date(2026, 8, 21), top_n=3)
+    html = render_email_html(digest, FIELDS, max_bytes=9000)
+    assert len(html.encode("utf-8")) <= 9000
+    for name, _ in digest.clusters:
+        if f"{name}（" in html:
+            heading_at = html.index(f"{name}（")
+            assert "<table" in html[heading_at:], f"{name} heading kept without its list"

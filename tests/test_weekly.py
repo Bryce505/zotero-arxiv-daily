@@ -363,3 +363,21 @@ def test_the_caches_live_under_the_output_root(weekly_config, stubbed, tmp_path)
     staged = stubbed["committed"][0]
     assert "state/theme_clusters.json" in staged
     assert "state/query_profiles.json" in staged
+
+
+def test_a_failed_send_does_not_mark_the_papers_as_delivered(weekly_config, stubbed, monkeypatch, tmp_path):
+    """Recording them before sending would bury the week's papers forever."""
+
+    def boom(config, subject, html, attachments):
+        raise RuntimeError("SMTP refused the connection")
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.send_digest", boom)
+    with pytest.raises(RuntimeError):
+        WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+
+    import json
+    import os
+
+    seen_path = tmp_path / "seen.json"
+    recorded = json.load(open(seen_path, encoding="utf-8")) if os.path.exists(seen_path) else []
+    assert "10.1000/0" not in recorded

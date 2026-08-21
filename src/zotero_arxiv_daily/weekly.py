@@ -189,13 +189,24 @@ class WeeklyExecutor(Executor):
         md_path = write_text(os.path.join(root, md_rel), render_markdown(digest, fields))
         html_path = write_text(os.path.join(root, html_rel), render_web_html(digest, fields))
 
+        # Paths are staged relative to *root*, which is also where git runs, so
+        # a non-default output_dir still archives.
+        pdf_paths = attachment_candidates(digest, int(self.config.report.attach_pdfs))
+        attachments = select_attachments([html_path] + pdf_paths)
+        # Deliver first: recording these DOIs before the email lands would
+        # suppress them from every future digest with nothing sent.
+        send_digest(
+            self.config,
+            f"CMC 文献周报 {label}（共 {digest.total} 篇）",
+            render_email_html(digest, fields),
+            attachments,
+        )
+
         save_seen(
             os.path.join(root, seen_rel),
             seen | {d for d in (normalize_doi(p.doi) for p in delivered) if d},
         )
 
-        # Paths are staged relative to *root*, which is also where git runs, so
-        # a non-default output_dir still archives.
         # The runner is ephemeral, so an uncommitted cache is no cache: without
         # these the LLM re-clusters every week and the theme names drift.
         wanted = [
@@ -215,14 +226,6 @@ class WeeklyExecutor(Executor):
             cwd=root,
         )
 
-        pdf_paths = attachment_candidates(digest, int(self.config.report.attach_pdfs))
-        attachments = select_attachments([html_path] + pdf_paths)
-        send_digest(
-            self.config,
-            f"CMC 文献周报 {label}（共 {digest.total} 篇）",
-            render_email_html(digest, fields),
-            attachments,
-        )
         logger.info(f"Digest {label} delivered: {digest.total} papers, archived at {md_path}")
         return digest
 

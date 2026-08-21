@@ -36,9 +36,18 @@ def git_commit_paths(paths: list[str], message: str, config, cwd: str = ".") -> 
     _run(["git", "config", "user.name", str(settings.get("user_name") or "zotero-cmc-weekly")], cwd)
     _run(["git", "config", "user.email", str(settings.get("user_email") or "actions@github.com")], cwd)
 
-    add = _run(["git", "add", "--", *paths], cwd)
-    if add.returncode != 0:
-        logger.warning(f"git add failed: {add.stderr.strip()}")
+    # git add is all-or-nothing: one absent or ignored pathspec aborts the
+    # whole call and stages nothing, which would lose the report and the
+    # seen-DOI state along with the optional artefact.
+    added = 0
+    for path in paths:
+        result = _run(["git", "add", "--", path], cwd)
+        if result.returncode != 0:
+            logger.info(f"Not archiving {path}: {result.stderr.strip() or 'nothing to add'}")
+            continue
+        added += 1
+    if added == 0:
+        logger.warning("None of the artefact paths could be staged")
         return False
 
     staged = _run(["git", "diff", "--cached", "--name-only"], cwd)
