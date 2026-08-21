@@ -68,3 +68,57 @@ def test_rerank_single_candidate_single_corpus():
 def test_get_reranker_cls_unknown():
     with pytest.raises(ValueError, match="not found"):
         get_reranker_cls("nonexistent_reranker_xyz")
+
+
+class ContentSensitiveReranker(BaseReranker):
+    """Similarity depends on the abstracts, so column order is observable."""
+
+    def __init__(self):
+        self.config = None
+
+    def get_similarity_score(self, s1, s2):
+        return np.array([[float(len(a) + len(b)) for b in s2] for a in s1])
+
+
+def test_time_decay_weights_sum_to_one():
+    from zotero_arxiv_daily.reranker.base import time_decay_weights
+
+    weights = time_decay_weights(120)
+    assert weights.shape == (120,)
+    assert np.isclose(weights.sum(), 1.0)
+
+
+def test_time_decay_weights_favour_recent_entries():
+    from zotero_arxiv_daily.reranker.base import time_decay_weights
+
+    weights = time_decay_weights(120)
+    assert weights[0] > weights[-1]
+
+
+def test_time_decay_weights_handle_a_single_entry():
+    from zotero_arxiv_daily.reranker.base import time_decay_weights
+
+    assert np.isclose(time_decay_weights(1).sum(), 1.0)
+
+
+def test_similarity_matrix_has_the_candidate_by_corpus_shape():
+    corpus = make_sample_corpus(3)
+    papers = [make_sample_paper(title=f"Paper {i}") for i in range(2)]
+    matrix = ContentSensitiveReranker().similarity_matrix(papers, corpus)
+    assert matrix.shape == (2, 3)
+
+
+def test_similarity_matrix_preserves_the_given_corpus_order():
+    """Columns follow the corpus argument, not any internal re-sort.
+
+    Cluster membership indexes the corpus as handed in, so a caller must be
+    able to rely on the column order.
+    """
+    corpus = make_sample_corpus(3)
+    papers = [make_sample_paper(title="P")]
+    reranker = ContentSensitiveReranker()
+
+    forward = reranker.similarity_matrix(papers, corpus)
+    reversed_matrix = reranker.similarity_matrix(papers, list(reversed(corpus)))
+
+    assert list(forward[0]) == list(reversed(list(reversed_matrix[0])))

@@ -1,0 +1,19 @@
+{
+  "fingerprint": "c786ebf242cc4b9f",
+  "profiles": [
+    {
+      "cluster": "电荷",
+      "mesh_terms": [],
+      "free_terms": [],
+      "pubmed_query": "q1",
+      "plain_query": "p1"
+    },
+    {
+      "cluster": "HCP",
+      "mesh_terms": [],
+      "free_terms": [],
+      "pubmed_query": "q2",
+      "plain_query": "p2"
+    }
+  ]
+}

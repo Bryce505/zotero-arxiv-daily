@@ -1,0 +1,23 @@
+{
+  "fingerprint": "8e669f9b7e292497",
+  "clusters": [
+    {
+      "name": "电荷",
+      "description": "d",
+      "member_titles": [
+        "Corpus 0",
+        "Corpus 1",
+        "Corpus 2"
+      ]
+    },
+    {
+      "name": "HCP",
+      "description": "d",
+      "member_titles": [
+        "Corpus 3",
+        "Corpus 4",
+        "Corpus 5"
+      ]
+    }
+  ]
+}

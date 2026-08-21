@@ -3,17 +3,35 @@ from omegaconf import DictConfig
 from ..protocol import Paper, CorpusPaper
 import numpy as np
 from typing import Type
+
+
+def time_decay_weights(n: int) -> np.ndarray:
+    """Normalised weights that favour recently added corpus entries.
+
+    Expects the corpus to already be sorted newest-first.
+    """
+    weights = 1 / (1 + np.log10(np.arange(n) + 1))
+    return weights / weights.sum()
+
+
 class BaseReranker(ABC):
     def __init__(self, config:DictConfig):
         self.config = config
 
-    def rerank(self, candidates:list[Paper], corpus:list[CorpusPaper]) -> list[Paper]:
-        corpus = sorted(corpus,key=lambda x: x.added_date,reverse=True)
-        time_decay_weight = 1 / (1 + np.log10(np.arange(len(corpus)) + 1))
-        time_decay_weight: np.ndarray = time_decay_weight / time_decay_weight.sum()
+    def similarity_matrix(self, candidates:list[Paper], corpus:list[CorpusPaper]) -> np.ndarray:
+        """Return the [n_candidate, n_corpus] similarity matrix.
+
+        Columns follow the order of *corpus* as given, so a caller holding
+        index-based cluster membership can rely on it.
+        """
         sim = self.get_similarity_score([c.abstract for c in candidates], [c.abstract for c in corpus])
         assert sim.shape == (len(candidates), len(corpus))
-        scores = (sim * time_decay_weight).sum(axis=1) * 10 # [n_candidate]
+        return sim
+
+    def rerank(self, candidates:list[Paper], corpus:list[CorpusPaper]) -> list[Paper]:
+        corpus = sorted(corpus,key=lambda x: x.added_date,reverse=True)
+        sim = self.similarity_matrix(candidates, corpus)
+        scores = (sim * time_decay_weights(len(corpus))).sum(axis=1) * 10 # [n_candidate]
         for s,c in zip(scores,candidates):
             c.score = s
         candidates = sorted(candidates,key=lambda x: x.score,reverse=True)

@@ -12,12 +12,22 @@ source:
     category: null # The categories of target biorxiv papers. Find categories from [here](https://www.biorxiv.org/). Example: ["biochemistry","animal behavior and cognition"]
   medrxiv:
     category: null # The categories of target medrxiv papers. Find categories from [here](https://www.medrxiv.org/) Example: ["psychiatry and clinical psychology", "neurology"]
+  pubmed:
+    api_key: ${oc.env:NCBI_API_KEY,null}   # Optional NCBI key; lifts the rate limit from 3 to 10 req/s. Self-service, issued instantly.
+    email: ${oc.env:CONTACT_EMAIL,null}    # Contact address sent with E-utilities requests, per NCBI's usage policy.
+    tool: zotero-cmc-weekly               # Tool name sent with E-utilities requests.
+  crossref:
+    mailto: ${oc.env:CONTACT_EMAIL,null}   # Joins Crossref's polite pool: better latency, fewer throttles.
+  openalex:
+    mailto: ${oc.env:CONTACT_EMAIL,null}   # Joins OpenAlex's polite pool.
+  europepmc: {}                           # No credentials required.
   chemrxiv:
     include_new_versions: false # Whether to include revised versions (v2, v3, ...) of previously posted chemrxiv preprints in addition to new first postings. chemrxiv has no category filter: all new preprints (a few dozen per day) are retrieved via Crossref and left to the reranker. Example: true
 
 email:
   sender: ??? # The email account of the SMTP server that sends you email. Example: abc@qq.com
   receiver: ??? # The email account that receives the paper list. Example: abc@outlook.com
+  recipients: ${oc.env:RECIPIENTS,null} # The weekly digest recipient list; all are Bcc'd. A YAML list or one delimited string. Falls back to `receiver` when unset. Example: "a@corp.com, b@corp.com"
   smtp_server: ??? # The SMTP server that sends the email. Ask your email provider (Gmail, QQ, Outlook, ...) for its SMTP server. Example: smtp.qq.com
   smtp_port: ??? # The port of SMTP server. Example: 465
   sender_password: ??? # The password of the sender account. Note that it's not necessarily the password for logging in the e-mail client, but the authentication code for SMTP service. Ask your email provider for this. Example: abcdefghijklmn
@@ -51,3 +61,36 @@ executor:
   max_paper_num: 100 # The maximum number of the papers presented in the email. Example: 100
   source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv']
   reranker: local # The reranker to use. Example: 'local' or 'api'
+
+search:
+  sources: ['pubmed','europepmc','crossref','openalex'] # Query-style sources used by the weekly digest.
+  n_clusters: 5           # How many themes to group the Zotero corpus into.
+  per_cluster_limit: 25   # Max candidates fetched per cluster per source.
+  cluster_cache: state/theme_clusters.json  # Rebuilt only when the corpus changes.
+  profile_cache: state/query_profiles.json  # Rebuilt only when the cluster set changes.
+  seen_state: state/seen_dois.json          # DOIs already delivered, for cross-week de-duplication.
+
+fulltext:
+  enabled: true            # Whether to attempt open-access full-text retrieval.
+  unpaywall_email: ${oc.env:CONTACT_EMAIL,null} # Required by the Unpaywall API; without it that rung of the ladder is skipped.
+  max_bytes: 20000000      # Reject any single PDF larger than this.
+
+report:
+  min_papers: 15           # Below this, top up with highly-cited backfill.
+  max_papers: 25           # Hard ceiling on the digest length.
+  top_picks: 3             # Size of the "read these first" section.
+  min_per_cluster: 1       # Floor so a small theme is never crowded out.
+  attach_pdfs: 5           # How many PDFs to attach to the email; the rest stay archived.
+  output_dir: '.'          # Root the artefacts are written under.
+  fields:                  # Drives both the extraction prompt and the rendered output.
+    - {key: background,  label: 背景,        instruction: 这项研究的背景与动机}
+    - {key: gap,         label: 待解决的问题, instruction: 本文试图解决的、此前尚未解决的问题}
+    - {key: method,      label: 方法,        instruction: 采用的分析方法、样品与关键参数}
+    - {key: conclusion,  label: 结论,        instruction: 主要结果与结论}
+    - {key: insight,     label: 洞见,        instruction: 对生物制药 CMC 分析实践的启发}
+
+git:
+  enabled: true            # Whether to commit the artefacts back to the repository.
+  user_name: zotero-cmc-weekly
+  user_email: actions@github.com
+  include_pdfs: true       # Commit the week's downloaded PDFs too. Set false to keep the repository small.
