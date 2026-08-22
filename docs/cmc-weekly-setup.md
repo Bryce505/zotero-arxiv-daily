@@ -64,6 +64,8 @@ source:
 
 > `search`、`fulltext`、`report`、`git` 四段**不用写**——`base.yaml` 里已有可用默认值，且 `NCBI_API_KEY`、`CONTACT_EMAIL`、`RECIPIENTS` 会自动注入。
 
+**`report` 段尤其不要往这里搬。** `report.journals.allow`（63 本期刊）、`report.industry.names`（52 家企业）、`report.fields`（5 个报告字段）这三份长内容只应该改 `config/base.yaml`，不要写进 `CUSTOM_CONFIG`。原因是 OmegaConf 合并两层配置时，字典逐键合并，但**列表是整体替换**：`CUSTOM_CONFIG` 里哪怕只写 `report.journals.allow: ["Nature"]` 这一行，也会把 `base.yaml` 里那 63 本期刊全部顶替掉，`bonus` 之类的标量倒是会保留，而且不会有任何报错提示——下一周的周报会用一份只剩一本刊的名单默默跑完。`min_relevance`/`min_score` 这类单个数值两处都能改，没有这个问题。完整的实测演示和两条修改路径的操作步骤见 [`README.md`](../README.md) 第 6 节「配置在哪里、怎么改」。
+
 ---
 
 ## 2. Secrets 清单
@@ -103,11 +105,12 @@ zhang@qq.com, li@yourcompany.com, wang@outlook.com
 
 （三个新 workflow 实测都是 `active` 状态，不需要手动启用。若你的环境显示被禁用，先点 Enable。）
 
-**实测输出**（2026-08-22，run 32548936193，耗时 51 秒）：
+**实测输出**（2026-08-22，run 32548936193，耗时 51 秒；`report-config` 检查是相关性闸门改造之后才加的第 7 项，这次实测跑的时候还没有，下面按当前 `config/base.yaml` 的真实内容把它补在第一行，其余 9 行是原始实测结果）：
 
 ```
 Preflight
 ────────────────────────────────────────────────────────────
+[ OK ] report-config 63 journals, 52 companies, 5 fields (2 text / 3 list)
 [ OK ] zotero       111 of 112 papers matched include_path
 [ OK ] llm          deepseek-v4-flash answered (中文)
 [ OK ] pubmed       2 probe results

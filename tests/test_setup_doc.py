@@ -162,3 +162,55 @@ def test_no_workflow_swallows_a_failed_push():
         )
     ]
     assert not offenders, f"these workflows swallow a failed push: {offenders}"
+
+
+README = REPO / "README.md"
+
+
+def test_the_readme_documents_every_new_report_key():
+    text = README.read_text(encoding="utf-8")
+    for key in ("min_relevance", "min_score", "triage_pool", "triage_batch"):
+        assert key in text, f"README never mentions {key}"
+
+
+def test_the_readme_explains_where_each_list_lives():
+    # The list-replacement trap is the one that silently loses half a
+    # curated list, so the README must name both files.
+    text = README.read_text(encoding="utf-8")
+    assert "config/base.yaml" in text
+    assert "CUSTOM_CONFIG" in text
+
+
+def test_the_readme_no_longer_claims_to_be_the_upstream_arxiv_tool():
+    text = README.read_text(encoding="utf-8")
+    assert "Recommend new arxiv papers of your interest daily" not in text
+
+
+def test_the_readme_walks_through_paper_selection():
+    text = README.read_text(encoding="utf-8")
+    for stage in ("分诊", "闸门", "配额", "补位"):
+        assert stage in text
+
+
+def test_every_field_instruction_still_carries_a_word_budget(composed):
+    # Word budgets are the only mechanism limiting field length — truncating
+    # would cut a sentence in half — so an edit that drops one must fail here.
+    from zotero_arxiv_daily.extract import load_field_specs
+
+    for spec in load_field_specs(composed):
+        assert re.search(r"\d+\s*[-–]\s*\d+\s*字", spec.instruction), (
+            f"field {spec.key!r} lost its word budget"
+        )
+
+
+def test_the_list_fields_are_the_ones_the_design_settled_on(composed):
+    from zotero_arxiv_daily.extract import load_field_specs
+
+    kinds = {s.key: s.kind for s in load_field_specs(composed)}
+    assert kinds == {
+        "background": "text",
+        "gap": "text",
+        "method": "list",
+        "conclusion": "list",
+        "insight": "list",
+    }
