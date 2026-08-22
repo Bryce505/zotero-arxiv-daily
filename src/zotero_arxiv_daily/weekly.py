@@ -30,7 +30,7 @@ from zotero_arxiv_daily.executor import Executor, normalize_path_patterns
 from zotero_arxiv_daily.extract import extract_all, load_field_specs
 from zotero_arxiv_daily.fulltext.resolver import download_fulltext
 from zotero_arxiv_daily.mailer import select_attachments, send_digest
-from zotero_arxiv_daily.publish import git_commit_paths, write_text
+from zotero_arxiv_daily.publish import git_commit_paths, git_push_artefacts, write_text
 from zotero_arxiv_daily.quota import allocate_quota, take_by_quota
 from zotero_arxiv_daily.report import build_digest, render_email_html, render_markdown, render_web_html
 from zotero_arxiv_daily.reranker import get_reranker_cls
@@ -244,12 +244,20 @@ class WeeklyExecutor(Executor):
         if any(p.pdf_path for p in delivered) and self.config.git.get("include_pdfs", True):
             wanted.append(pdf_rel)
         staged = [rel for rel in (_stageable(w, root) for w in wanted) if rel]
-        git_commit_paths(
+        committed = git_commit_paths(
             staged,
             f"docs: add CMC literature digest {label}",
             self.config,
             cwd=root,
         )
+        # An unpushed commit dies with the runner, taking the report, the
+        # seen-DOI state and the caches with it — and the mail has already
+        # gone out, so nothing else would ever reveal the loss.
+        if not git_push_artefacts(self.config, cwd=root):
+            raise RuntimeError(
+                f"Digest {label} was mailed but could not be pushed; "
+                "the archive and the seen-DOI state are lost with this runner"
+            )
 
         logger.info(f"Digest {label} delivered: {digest.total} papers, archived at {md_path}")
         return digest

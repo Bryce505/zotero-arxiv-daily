@@ -73,7 +73,7 @@ def weekly_config(config, tmp_path):
 @pytest.fixture()
 def stubbed(monkeypatch, weekly_config):
     """Stub every network boundary the weekly run touches."""
-    state = {"sent": [], "committed": []}
+    state = {"sent": [], "committed": [], "pushed": False}
 
     monkeypatch.setattr(
         "zotero_arxiv_daily.weekly.WeeklyExecutor.fetch_zotero_corpus",
@@ -134,6 +134,10 @@ def stubbed(monkeypatch, weekly_config):
     monkeypatch.setattr(
         "zotero_arxiv_daily.weekly.git_commit_paths",
         lambda paths, message, config, cwd=".": state["committed"].append(paths) or True,
+    )
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.weekly.git_push_artefacts",
+        lambda config, cwd=".": state.__setitem__("pushed", True) or True,
     )
     return state
 
@@ -516,3 +520,20 @@ def test_each_source_receives_the_query_form_it_can_answer(weekly_config, monkey
         "openalex": '"size exclusion chromatography" OR "CE-SDS"',
         "crossref": "SEC CE-SDS HIC HPLC purity content analysis protein size variants",
     }
+
+
+def test_the_digest_is_pushed_after_it_is_committed(weekly_config, stubbed):
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert stubbed["pushed"], "committing without pushing loses the archive with the runner"
+
+
+def test_a_failed_push_is_raised_rather_than_swallowed(weekly_config, stubbed, monkeypatch):
+    """The workflow used to run `git push || echo`, so a rejected push was
+    invisible: the step, the job and the whole run reported success while the
+    ephemeral runner carried off the only copy of the report and the seen-DOI
+    state. A failure here must reach the operator."""
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.weekly.git_push_artefacts", lambda config, cwd=".": False
+    )
+    with pytest.raises(RuntimeError, match="push"):
+        WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))

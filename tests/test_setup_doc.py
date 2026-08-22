@@ -142,3 +142,23 @@ def test_every_variable_the_documented_config_needs_is_exported_by_every_workflo
         if needed - exported_env(workflow)
     }
     assert not missing, f"workflows do not export variables the documented config needs: {missing}"
+
+
+def test_no_workflow_swallows_a_failed_push():
+    """`git push || echo` reported success on a rejected push.
+
+    It cost a digest: the run held its checkout for an hour, another commit
+    landed on the branch meanwhile, the push was rejected, and the step, job
+    and run all went green while the ephemeral runner was reclaimed carrying
+    the only copy of the report and the seen-DOI state. Pushing is now
+    `git_push_artefacts`, which rebases and reports failure.
+    """
+    offenders = [
+        workflow
+        for workflow in CONFIG_CONSUMING_WORKFLOWS
+        if re.search(
+            r"git push[^\n]*\|\|",
+            (REPO / ".github" / "workflows" / workflow).read_text(encoding="utf-8"),
+        )
+    ]
+    assert not offenders, f"these workflows swallow a failed push: {offenders}"

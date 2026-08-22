@@ -39,5 +39,3 @@ jobs:
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
           uv run src/zotero_arxiv_daily/weekly.py
 
-      - name: Push the archived digest
-        run: git push || echo "nothing to push"

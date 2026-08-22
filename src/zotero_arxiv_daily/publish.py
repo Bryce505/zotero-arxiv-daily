@@ -62,3 +62,60 @@ def git_commit_paths(paths: list[str], message: str, config, cwd: str = ".") -> 
 
     logger.info(f"Committed {len(staged.stdout.strip().splitlines())} artefact files")
     return True
+
+
+def _current_branch(cwd: str) -> str:
+    result = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd)
+    return result.stdout.strip()
+
+
+def git_push_artefacts(config, cwd: str = ".", attempts: int = 5) -> bool:
+    """Push the digest commit, rebasing past anything that landed meanwhile.
+
+    The digest job holds its checkout for the length of the run — measured at
+    an hour — and anything else pushing to the branch in that window makes a
+    plain push fail. The previous ``git push || echo "nothing to push"``
+    swallowed that failure and reported success, so the ephemeral runner was
+    reclaimed carrying the only copy of the report, the seen-DOI state and
+    the caches. Returning False here is what makes the loss visible.
+    """
+    if not config.git.get("enabled", True):
+        logger.info("git.enabled is false; leaving artefacts unpushed")
+        return True
+
+    branch = _current_branch(cwd)
+    if not branch or branch == "HEAD":
+        logger.warning("Not on a branch; refusing to push a detached HEAD")
+        return False
+
+    for attempt in range(1, attempts + 1):
+        ahead = _run(["git", "log", "--oneline", f"origin/{branch}..HEAD"], cwd)
+        if ahead.returncode == 0 and not ahead.stdout.strip():
+            logger.info("No artefact commit to push")
+            return True
+
+        push = _run(["git", "push", "origin", f"HEAD:{branch}"], cwd)
+        if push.returncode == 0:
+            logger.info(f"Pushed the digest to {branch} on attempt {attempt}")
+            return True
+
+        detail = (push.stderr or push.stdout).strip().splitlines()
+        logger.warning(f"Push rejected on attempt {attempt}: {detail[-1] if detail else 'unknown'}")
+        if attempt == attempts:
+            break
+
+        fetch = _run(["git", "fetch", "origin", branch], cwd)
+        if fetch.returncode != 0:
+            logger.warning(f"Cannot reach origin: {fetch.stderr.strip()}")
+            continue
+        rebase = _run(["git", "rebase", f"origin/{branch}"], cwd)
+        if rebase.returncode != 0:
+            _run(["git", "rebase", "--abort"], cwd)
+            logger.error(f"Cannot rebase onto origin/{branch}: {rebase.stderr.strip()}")
+            return False
+
+    logger.error(
+        f"Could not push the digest to {branch} after {attempts} attempts; "
+        "the archive and the seen-DOI state would be lost with this runner"
+    )
+    return False

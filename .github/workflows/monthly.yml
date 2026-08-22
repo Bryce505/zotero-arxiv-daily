@@ -38,5 +38,3 @@ jobs:
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
           uv run src/zotero_arxiv_daily/monthly.py
 
-      - name: Push the archived synthesis
-        run: git push || echo "nothing to push"

@@ -18,7 +18,7 @@ from omegaconf import DictConfig
 from openai import OpenAI
 
 from zotero_arxiv_daily.mailer import select_attachments, send_digest
-from zotero_arxiv_daily.publish import git_commit_paths, write_text
+from zotero_arxiv_daily.publish import git_commit_paths, git_push_artefacts, write_text
 from zotero_arxiv_daily.utils import truncate_for_prompt
 
 _WEEK_FILE_RE = re.compile(r"^(\d{4})-(\d{2})-W\d+\.md$")
@@ -108,6 +108,8 @@ class MonthlyExecutor:
             self.config,
             cwd=root,
         )
+        if not git_push_artefacts(self.config, cwd=root):
+            raise RuntimeError(f"Synthesis {label} could not be pushed; the archive is lost")
 
         send_digest(
             self.config,

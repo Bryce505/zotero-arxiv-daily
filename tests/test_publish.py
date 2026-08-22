@@ -5,7 +5,7 @@ import subprocess
 
 from omegaconf import OmegaConf
 
-from zotero_arxiv_daily.publish import git_commit_paths, write_text
+from zotero_arxiv_daily.publish import git_commit_paths, git_push_artefacts, write_text
 
 
 def make_config(enabled=True):
@@ -132,3 +132,93 @@ def test_a_gitignored_path_does_not_sink_the_whole_commit(tmp_path):
 def test_a_commit_of_only_missing_paths_is_skipped(tmp_path):
     repo = _init_repo(tmp_path)
     assert git_commit_paths(["nope/a.md"], "docs: add", make_config(), cwd=repo) is False
+
+
+def _run(args, cwd):
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=True)
+
+
+def _clone_pair(tmp_path):
+    """A bare remote plus two independent clones of it.
+
+    Reproduces the runner's situation: the digest job holds a checkout for the
+    length of the run while anything else may push to the same branch.
+    """
+    remote = str(tmp_path / "remote.git")
+    _run(["git", "init", "-q", "--bare", "-b", "main", remote], str(tmp_path))
+    seed = _init_repo(tmp_path)
+    _run(["git", "branch", "-M", "main"], seed)
+    _run(["git", "remote", "add", "origin", remote], seed)
+    _run(["git", "push", "-q", "-u", "origin", "main"], seed)
+
+    clones = []
+    for name in ("runner", "other"):
+        path = str(tmp_path / name)
+        _run(["git", "clone", "-q", remote, path], str(tmp_path))
+        _run(["git", "config", "user.email", f"{name}@example.org"], path)
+        _run(["git", "config", "user.name", name], path)
+        clones.append(path)
+    return remote, clones[0], clones[1]
+
+
+def _commit_file(repo, name, body="x"):
+    write_text(os.path.join(repo, name), body)
+    _run(["git", "add", "--", name], repo)
+    _run(["git", "commit", "-q", "-m", f"add {name}"], repo)
+
+
+def _remote_log(remote):
+    return subprocess.run(
+        ["git", "log", "--oneline", "main"], cwd=remote, capture_output=True, text=True
+    ).stdout
+
+
+def test_push_lands_the_digest_commit_on_the_remote(tmp_path):
+    remote, runner, _ = _clone_pair(tmp_path)
+    _commit_file(runner, "digest.md")
+
+    assert git_push_artefacts(make_config(), cwd=runner) is True
+    assert "add digest.md" in _remote_log(remote)
+
+
+def test_push_rebases_onto_a_concurrent_push_instead_of_losing_the_digest(tmp_path):
+    """The demonstrated data-loss path.
+
+    A digest run holds its checkout for the length of the run. When anything
+    else pushes to the branch meanwhile, a plain push is rejected — and with
+    `git push || echo` the workflow swallowed it, reported success, and the
+    ephemeral runner took the only copy of the report and the seen-DOI state
+    with it.
+    """
+    remote, runner, other = _clone_pair(tmp_path)
+    _commit_file(runner, "digest.md")
+    _commit_file(other, "unrelated.md")
+    _run(["git", "push", "-q", "origin", "main"], other)
+
+    assert git_push_artefacts(make_config(), cwd=runner) is True
+
+    log = _remote_log(remote)
+    assert "add digest.md" in log, "the digest commit must survive the race"
+    assert "add unrelated.md" in log, "the concurrent commit must not be clobbered"
+
+
+def test_push_reports_failure_when_it_cannot_land(tmp_path):
+    """Failure must be visible: silence is what made the loss undetectable."""
+    _, runner, _ = _clone_pair(tmp_path)
+    _commit_file(runner, "digest.md")
+    _run(["git", "remote", "set-url", "origin", str(tmp_path / "gone.git")], runner)
+
+    assert git_push_artefacts(make_config(), cwd=runner, attempts=1) is False
+
+
+def test_nothing_to_push_is_success(tmp_path):
+    _, runner, _ = _clone_pair(tmp_path)
+    assert git_push_artefacts(make_config(), cwd=runner) is True
+
+
+def test_push_is_skipped_when_git_is_disabled(tmp_path):
+    remote, runner, _ = _clone_pair(tmp_path)
+    _commit_file(runner, "digest.md")
+
+    assert git_push_artefacts(make_config(enabled=False), cwd=runner) is True
+    assert "add digest.md" not in _remote_log(remote)
