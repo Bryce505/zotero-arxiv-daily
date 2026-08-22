@@ -7,6 +7,7 @@ list it under "needs manual retrieval" — publisher-proxy automation is
 deliberately out of scope (spec finding 4).
 """
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ _UNPAYWALL = "https://api.unpaywall.org/v2/{doi}"
 _EPMC_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
 _UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]")
 _PDF_MAGIC = b"%PDF"
+_TITLE_MAX_LEN = 80
 
 
 @dataclass
@@ -107,7 +109,26 @@ def resolve_pdf(paper: Paper, config) -> FullTextResult:
 
 
 def _filename_for(paper: Paper, index: int) -> str:
-    stem = paper.doi or f"paper-{index}"
+    """A filename a person can recognise in a file browser without opening it.
+
+    A DOI is stable but meaningless at a glance; year-author-title is what a
+    reader actually wants to see.  A short hash suffix — derived from the DOI
+    when there is one, so a rerun reproduces the same name rather than
+    orphaning the previous file — keeps two papers with the same year, same
+    first author, and a title identical in its first 80 characters from
+    silently overwriting each other after truncation.
+    """
+    if not paper.pub_date and not paper.authors and not paper.title:
+        return f"paper-{index}.pdf"
+
+    year = str(paper.pub_date.year) if paper.pub_date else "unknown"
+    author = paper.authors[0] if paper.authors else "unknown"
+    title = (paper.title or "")[:_TITLE_MAX_LEN]
+
+    identity = paper.doi or paper.title or str(index)
+    suffix = hashlib.md5(identity.encode("utf-8")).hexdigest()[:6]
+
+    stem = f"{year}-{author}-{title}-{suffix}"
     return _UNSAFE_NAME_RE.sub("_", stem) + ".pdf"
 
 

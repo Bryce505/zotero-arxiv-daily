@@ -134,16 +134,157 @@ def test_download_writes_pdfs_and_records_the_path(cfg, tmp_path, monkeypatch):
     assert papers[0].oa_status == "open"
 
 
-def test_download_sanitises_the_doi_into_a_filename(cfg, tmp_path, monkeypatch):
+def test_download_names_the_file_year_author_title(cfg, tmp_path, monkeypatch):
+    import os
+    from datetime import date
+
+    monkeypatch.setattr(requests, "get", lambda url, **kw: pdf_response())
+    monkeypatch.setattr("zotero_arxiv_daily.fulltext.resolver.extract_markdown_from_pdf", lambda path: "md")
+    papers = [
+        make_paper(
+            doi="10.1016/j.chroma.2026.01.001",
+            pdf_url="https://example.org/a.pdf",
+            authors=["Zhang Wei", "Doe Jane"],
+            title="Charge Variant Analysis of Monoclonal Antibodies",
+            pub_date=date(2026, 3, 4),
+        )
+    ]
+    download_fulltext(papers, cfg, str(tmp_path))
+    name = os.path.basename(papers[0].pdf_path)
+    assert "/" not in name
+    assert name.startswith("2026-Zhang_Wei-Charge_Variant_Analysis_of_Monoclonal_Antibodies-")
+    assert name.endswith(".pdf")
+
+
+def test_filename_falls_back_to_unknown_year_when_pub_date_is_missing(cfg, tmp_path, monkeypatch):
     import os
 
     monkeypatch.setattr(requests, "get", lambda url, **kw: pdf_response())
     monkeypatch.setattr("zotero_arxiv_daily.fulltext.resolver.extract_markdown_from_pdf", lambda path: "md")
-    papers = [make_paper(doi="10.1016/j.chroma.2026.01.001", pdf_url="https://example.org/a.pdf")]
+    papers = [
+        make_paper(
+            doi="10.1016/no-date",
+            pdf_url="https://example.org/a.pdf",
+            authors=["Roe Ann"],
+            title="A Paper With No Publication Date",
+        )
+    ]
     download_fulltext(papers, cfg, str(tmp_path))
     name = os.path.basename(papers[0].pdf_path)
-    assert "/" not in name
-    assert name == "10.1016_j.chroma.2026.01.001.pdf"
+    assert name.startswith("unknown-Roe_Ann-A_Paper_With_No_Publication_Date-")
+
+
+def test_filename_falls_back_to_unknown_author_when_authors_is_empty(cfg, tmp_path, monkeypatch):
+    import os
+    from datetime import date
+
+    monkeypatch.setattr(requests, "get", lambda url, **kw: pdf_response())
+    monkeypatch.setattr("zotero_arxiv_daily.fulltext.resolver.extract_markdown_from_pdf", lambda path: "md")
+    papers = [
+        make_paper(
+            doi="10.1016/no-authors",
+            pdf_url="https://example.org/a.pdf",
+            authors=[],
+            title="A Paper With No Listed Authors",
+            pub_date=date(2026, 1, 1),
+        )
+    ]
+    download_fulltext(papers, cfg, str(tmp_path))
+    name = os.path.basename(papers[0].pdf_path)
+    assert name.startswith("2026-unknown-A_Paper_With_No_Listed_Authors-")
+
+
+def test_filename_truncates_a_long_title(cfg, tmp_path, monkeypatch):
+    import os
+    from datetime import date
+
+    monkeypatch.setattr(requests, "get", lambda url, **kw: pdf_response())
+    monkeypatch.setattr("zotero_arxiv_daily.fulltext.resolver.extract_markdown_from_pdf", lambda path: "md")
+    long_title = "A" * 200
+    papers = [
+        make_paper(
+            doi="10.1016/long-title",
+            pdf_url="https://example.org/a.pdf",
+            authors=["Roe Ann"],
+            title=long_title,
+            pub_date=date(2026, 1, 1),
+        )
+    ]
+    download_fulltext(papers, cfg, str(tmp_path))
+    name = os.path.basename(papers[0].pdf_path)
+    # Well under the filesystem's ~255-byte limit even with a long title, a
+    # long author list, and the disambiguating suffix all present at once.
+    assert len(name) < 150
+    assert "A" * 200 not in name
+
+
+def test_filename_disambiguates_same_year_author_and_title_prefix(cfg, tmp_path, monkeypatch):
+    """Two different papers, same year/author, and titles identical in their
+    first 80 characters, must not silently overwrite each other on disk."""
+    import os
+    from datetime import date
+
+    monkeypatch.setattr(requests, "get", lambda url, **kw: pdf_response())
+    monkeypatch.setattr("zotero_arxiv_daily.fulltext.resolver.extract_markdown_from_pdf", lambda path: "md")
+    shared_prefix = "A Comparative Study of Charge Heterogeneity in Therapeutic Monoclonal Antibodies "
+    papers = [
+        make_paper(
+            doi="10.1016/part-one",
+            pdf_url="https://example.org/a.pdf",
+            authors=["Roe Ann"],
+            title=shared_prefix + "Part One",
+            pub_date=date(2026, 1, 1),
+        ),
+        make_paper(
+            doi="10.1016/part-two",
+            pdf_url="https://example.org/b.pdf",
+            authors=["Roe Ann"],
+            title=shared_prefix + "Part Two",
+            pub_date=date(2026, 1, 1),
+        ),
+    ]
+    download_fulltext(papers, cfg, str(tmp_path))
+    name_one = os.path.basename(papers[0].pdf_path)
+    name_two = os.path.basename(papers[1].pdf_path)
+    assert name_one != name_two
+
+
+def test_filename_is_stable_across_reruns_for_the_same_doi(cfg, tmp_path, monkeypatch):
+    """A re-run must reproduce the same filename for the same paper, not a
+    fresh random one — otherwise every rerun orphans the previous PDF."""
+    import os
+    from datetime import date
+
+    monkeypatch.setattr(requests, "get", lambda url, **kw: pdf_response())
+    monkeypatch.setattr("zotero_arxiv_daily.fulltext.resolver.extract_markdown_from_pdf", lambda path: "md")
+
+    def make_batch():
+        return [
+            make_paper(
+                doi="10.1016/rerun",
+                pdf_url="https://example.org/a.pdf",
+                authors=["Roe Ann"],
+                title="A Reproducible Paper",
+                pub_date=date(2026, 1, 1),
+            )
+        ]
+
+    first = make_batch()
+    download_fulltext(first, cfg, str(tmp_path))
+    second = make_batch()
+    download_fulltext(second, cfg, str(tmp_path))
+    assert os.path.basename(first[0].pdf_path) == os.path.basename(second[0].pdf_path)
+
+
+def test_filename_falls_back_to_index_when_everything_is_missing(cfg, tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.setattr(requests, "get", lambda url, **kw: pdf_response())
+    monkeypatch.setattr("zotero_arxiv_daily.fulltext.resolver.extract_markdown_from_pdf", lambda path: "md")
+    papers = [make_paper(doi=None, pdf_url="https://example.org/a.pdf", authors=[], title="")]
+    download_fulltext(papers, cfg, str(tmp_path))
+    name = os.path.basename(papers[0].pdf_path)
+    assert name == "paper-0.pdf"
 
 
 def test_download_leaves_closed_papers_abstract_only(cfg, tmp_path, monkeypatch):
