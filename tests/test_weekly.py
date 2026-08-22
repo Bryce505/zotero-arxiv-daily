@@ -1,5 +1,7 @@
 """End-to-end orchestration of the weekly digest, with every I/O stubbed."""
 
+import json
+import re
 from datetime import date, datetime
 from types import SimpleNamespace
 
@@ -60,6 +62,12 @@ def weekly_config(config, tmp_path):
                 "min_per_cluster": 1,
                 "attach_pdfs": 0,
                 "output_dir": str(tmp_path),
+                "min_relevance": 55,
+                "min_score": 60,
+                "triage_pool": 60,
+                "triage_batch": 8,
+                "journals": {"bonus": 10, "allow": ["Journal of Chromatography A"]},
+                "industry": {"bonus": 8, "names": ["Amgen"]},
                 "fields": [{"key": "background", "label": "背景", "instruction": "研究背景"}],
             }
         )
@@ -73,7 +81,9 @@ def weekly_config(config, tmp_path):
 @pytest.fixture()
 def stubbed(monkeypatch, weekly_config):
     """Stub every network boundary the weekly run touches."""
-    state = {"sent": [], "committed": [], "pushed": False}
+    # A number, or one number per candidate.  Tests dial this instead of
+    # replacing the stub, which also feeds clustering and profile distillation.
+    state = {"sent": [], "committed": [], "pushed": False, "relevance": 90}
 
     monkeypatch.setattr(
         "zotero_arxiv_daily.weekly.WeeklyExecutor.fetch_zotero_corpus",
@@ -90,10 +100,27 @@ def stubbed(monkeypatch, weekly_config):
     )
 
     def create(**kwargs):
-        try:
-            content = next(payloads)
-        except StopIteration:
-            content = '{"background":"抽取出的背景"}'
+        request = str(kwargs.get("messages", []))
+        # Triage asks for a JSON array and says how many papers are in the
+        # batch; answer every index so the gate has something to work with.
+        if '"relevance"' in request:
+            count = int(re.search(r"共 (\d+) 篇", request).group(1))
+            setting = state["relevance"]
+            rows = [
+                {
+                    "index": i,
+                    "relevance": setting[i - 1] if isinstance(setting, list) else setting,
+                    "reason": f"理由 {i}",
+                    "modalities": ["ADC"],
+                }
+                for i in range(1, count + 1)
+            ]
+            content = json.dumps(rows, ensure_ascii=False)
+        else:
+            try:
+                content = next(payloads)
+            except StopIteration:
+                content = '{"background":"抽取出的背景"}'
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
     monkeypatch.setattr(
@@ -537,3 +564,53 @@ def test_a_failed_push_is_raised_rather_than_swallowed(weekly_config, stubbed, m
     )
     with pytest.raises(RuntimeError, match="push"):
         WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+
+
+def test_every_delivered_paper_cleared_the_gate(weekly_config, stubbed):
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    for _, papers in digest.clusters:
+        for paper in papers:
+            assert paper.scoring is not None
+            assert paper.scoring.relevance >= weekly_config.report.min_relevance
+
+
+def test_an_irrelevant_candidate_never_reaches_the_digest(weekly_config, stubbed):
+    # 10 is the rubric's "no connection to biologics" band — where the
+    # sodium-ion battery paper belongs.
+    stubbed["relevance"] = 10
+    assert WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21)) is None
+    assert stubbed["sent"] == []
+
+
+def test_the_quota_is_allocated_only_among_survivors(weekly_config, stubbed):
+    # Three candidates, one qualifying. The quota is six slots across two
+    # clusters; the old code filled the rest from the tail of the list.
+    stubbed["relevance"] = [90, 10, 10]
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert sum(len(papers) for _, papers in digest.clusters) == 1
+
+
+def test_an_abbreviated_journal_name_does_not_match_the_full_title(weekly_config, stubbed):
+    # make_candidate() sets journal="J Chromatogr A"; the fixture lists
+    # "Journal of Chromatography A", which must NOT match an abbreviation.
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    paper = digest.clusters[0][1][0]
+    assert paper.scoring.journal_hit is None
+    assert paper.scoring.rank_score == 90
+
+
+def test_only_the_configured_pool_size_is_triaged(weekly_config, stubbed, monkeypatch):
+    from zotero_arxiv_daily.triage import triage_papers as real_triage
+
+    with open_dict(weekly_config):
+        weekly_config.report.triage_pool = 2
+
+    seen: list[int] = []
+
+    def counting(papers, client, llm_params, batch_size=8):
+        seen.append(len(papers))
+        return real_triage(papers, client, llm_params, batch_size)
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.triage_papers", counting)
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert seen[0] == 2

@@ -94,3 +94,32 @@ def test_backfill_does_nothing_without_profiles():
     retriever = StubRetriever([make_paper("10.1000/a", 100)])
     assert backfill_papers([], retriever, needed=5, exclude_dois=set()) == []
     assert retriever.calls == []
+
+
+def test_backfill_candidates_pass_through_the_gate():
+    profiles = [QueryProfile(cluster="c", mesh_terms=[], free_terms=[], pubmed_query="q", plain_query="p")]
+
+    class Retriever:
+        def search_highly_cited(self, query, limit):
+            return [
+                make_paper("10.1/keep", 500),
+                make_paper("10.1/drop", 900),
+            ]
+
+    def gate(papers):
+        return [p for p in papers if p.doi == "10.1/keep"]
+
+    # Without the gate the 900-citation paper would win. Highly cited is not
+    # the same as relevant — that is how a 2005 virology paper got in.
+    chosen = backfill_papers(profiles, Retriever(), needed=2, exclude_dois=set(), gate=gate)
+    assert [p.doi for p in chosen] == ["10.1/keep"]
+
+
+def test_backfill_without_a_gate_keeps_everything():
+    profiles = [QueryProfile(cluster="c", mesh_terms=[], free_terms=[], pubmed_query="q", plain_query="p")]
+
+    class Retriever:
+        def search_highly_cited(self, query, limit):
+            return [make_paper("10.1/a", 5)]
+
+    assert len(backfill_papers(profiles, Retriever(), needed=1, exclude_dois=set())) == 1

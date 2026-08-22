@@ -37,8 +37,10 @@ from zotero_arxiv_daily.reranker import get_reranker_cls
 from zotero_arxiv_daily.reranker.base import time_decay_weights
 from zotero_arxiv_daily.reranker.vector_cache import cached_similarity_matrix
 from zotero_arxiv_daily.retriever import get_query_retriever_cls
+from zotero_arxiv_daily.scoring import passing_papers, score_papers
 from zotero_arxiv_daily.search.cluster import assign_clusters, load_or_build_clusters
 from zotero_arxiv_daily.search.profile import load_or_build_profiles, query_for_source
+from zotero_arxiv_daily.triage import triage_papers
 from zotero_arxiv_daily.weeknum import library_dir, report_paths, week_label, week_window
 
 
@@ -133,6 +135,19 @@ class WeeklyExecutor(Executor):
         sim_original[:, order] = sim_sorted
         assign_clusters(candidates, sim_original, clusters)
 
+    def _gate(self, papers):
+        """Triage, score, and keep only what clears both thresholds."""
+        if not papers:
+            return []
+        triage_papers(
+            papers,
+            self.openai_client,
+            self.config.llm,
+            int(self.config.report.get("triage_batch", 8)),
+        )
+        score_papers(papers, self.config)
+        return passing_papers(papers, self.config)
+
     def run(self, anchor: date | None = None):
         anchor = anchor or datetime.now().date()
         label = week_label(anchor)
@@ -178,12 +193,20 @@ class WeeklyExecutor(Executor):
         if candidates:
             self._score_and_assign(candidates, corpus, clusters)
             candidates.sort(key=lambda p: -(p.score or 0.0))
+            # Triage is the cost ceiling: only the most similar candidates are
+            # worth an LLM call, and everything below is the least similar of
+            # an already-filtered pool.
+            pool = candidates[: int(self.config.report.get("triage_pool", 60))]
+            eligible = self._gate(pool)
             quota = allocate_quota(
                 {c.name: len(c.members) for c in clusters},
                 int(self.config.report.max_papers),
                 int(self.config.report.min_per_cluster),
             )
-            chosen = take_by_quota(candidates, quota)
+            # Quota is allocated among survivors only.  Allocating it over all
+            # candidates is what forced five themes times five slots to be
+            # filled from the tail of the list.
+            chosen = take_by_quota(eligible, quota)
 
         shortfall = int(self.config.report.min_papers) - len(chosen)
         backfill = []
@@ -193,6 +216,7 @@ class WeeklyExecutor(Executor):
                 get_query_retriever_cls("openalex")(self.config),
                 shortfall,
                 exclude | {d for d in (normalize_doi(p.doi) for p in chosen) if d},
+                gate=self._gate,
             )
 
         delivered = chosen + backfill

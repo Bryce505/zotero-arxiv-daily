@@ -20,8 +20,14 @@ def backfill_papers(
     retriever,
     needed: int,
     exclude_dois: set[str],
+    gate=None,
 ) -> list[Paper]:
-    """Return up to *needed* highly-cited papers across *profiles*."""
+    """Return up to *needed* highly-cited papers across *profiles*.
+
+    *gate* filters the oversampled pool before the citation sort.  Sorting by
+    citations without it is how a 2005 virology paper reached a CMC digest:
+    highly cited is not the same as relevant.
+    """
     if needed <= 0 or not profiles:
         return []
 
@@ -36,6 +42,8 @@ def backfill_papers(
 
     pool = [p for p in pool if (normalize_doi(p.doi) or "") not in exclude_dois]
     pool = dedup_papers(pool)
+    if gate is not None:
+        pool = gate(pool)
     pool.sort(key=lambda p: p.cited_by_count or 0, reverse=True)
     chosen = pool[:needed]
     logger.info(f"Backfilled {len(chosen)} highly-cited papers (needed {needed})")
