@@ -221,11 +221,45 @@ report:
   attach_pdfs: 5           # How many PDFs to attach to the email; the rest stay archived.
   output_dir: '.'          # Root the artefacts are written under.
   fields:                  # Drives both the extraction prompt and the rendered output.
-    - {key: background,  label: 背景,        instruction: 这项研究的背景与动机}
-    - {key: gap,         label: 待解决的问题, instruction: 本文试图解决的、此前尚未解决的问题}
-    - {key: method,      label: 方法,        instruction: 采用的分析方法、样品与关键参数}
-    - {key: conclusion,  label: 结论,        instruction: 主要结果与结论}
-    - {key: insight,     label: 洞见,        instruction: 对生物制药 CMC 分析实践的启发}
+    - key: background
+      label: 背景
+      kind: text
+      instruction: >-
+        用 120–180 字讲一个完整的小故事：这个领域原本靠什么手段做、遇到了什么具体的坎、
+        为什么这道坎现在必须迈过去。要有因果链，一句接一句推进，不要罗列名词，
+        不要用「本研究」开头。
+
+    - key: gap
+      label: 待解决的问题
+      kind: text
+      instruction: >-
+        用 60–100 字说清此前尚未解决的那一个核心问题。只讲问题本身，不讲本文怎么解决。
+
+    - key: method
+      label: 方法
+      kind: list
+      max_items: 5
+      instruction: >-
+        拆成 3–5 条。每条 point 是 2–6 字的关键词（如「柱系统」「检测方式」「验证项」），
+        detail 是 30–60 字的具体说明，含关键参数。不要把整段摘要塞进一条。
+
+    - key: conclusion
+      label: 结论
+      kind: list
+      max_items: 5
+      instruction: >-
+        拆成 2–5 条。每条 point 是该条结论的一句话概括，detail 是支撑它的关键数据
+        （回收率、纯度、线性 R²、LOD/LOQ 等），30–60 字。
+
+    - key: insight
+      label: 洞见
+      kind: list
+      max_items: 3
+      instruction: >-
+        拆成 2–3 条，每条必须落在给定的生物药类型上。point 是应用场景
+        （如「ADC 载药分布表征」「双抗错配体检测」），detail 说明具体怎么用、
+        能替代或补强现有哪一步、有什么前提限制，40–80 字。
+        禁止写「该方法高效可靠」这类不含信息的套话。
 
 git:
   enabled: true            # Whether to commit the artefacts back to the repository.

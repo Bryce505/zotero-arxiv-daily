@@ -165,3 +165,117 @@ def test_adding_a_field_in_config_changes_the_prompt_alone():
     prompt = recorder[0]["messages"][-1]["content"]
     assert "regulatory" in prompt
     assert "法规关联" in prompt
+
+from zotero_arxiv_daily.extract import ListItem, normalize_list_value
+from zotero_arxiv_daily.triage import TriageResult
+
+LIST_FIELDS = [
+    FieldSpec(key="background", label="背景", instruction="研究背景"),
+    FieldSpec(key="method", label="方法", instruction="拆成 3-5 条", kind="list", max_items=3),
+]
+
+
+def test_field_specs_default_to_plain_text():
+    cfg = OmegaConf.create({"report": {"fields": [{"key": "background", "label": "背景"}]}})
+    spec = load_field_specs(cfg)[0]
+    assert spec.kind == "text"
+    assert spec.max_items == 0
+
+
+def test_field_specs_read_kind_and_max_items():
+    cfg = OmegaConf.create(
+        {"report": {"fields": [{"key": "method", "label": "方法", "kind": "list", "max_items": 4}]}}
+    )
+    spec = load_field_specs(cfg)[0]
+    assert spec.kind == "list"
+    assert spec.max_items == 4
+
+
+def test_list_value_keeps_point_and_detail():
+    raw = [{"point": "柱系统", "detail": "C8 反相柱，变性条件"}]
+    assert normalize_list_value(raw, 0) == [ListItem(point="柱系统", detail="C8 反相柱，变性条件")]
+
+
+def test_a_list_of_bare_strings_becomes_detail_only_items():
+    assert normalize_list_value(["C8 反相柱", "SEC-3000 柱"], 0) == [
+        ListItem(point="", detail="C8 反相柱"),
+        ListItem(point="", detail="SEC-3000 柱"),
+    ]
+
+
+def test_a_plain_string_becomes_one_item():
+    assert normalize_list_value("C8 反相柱，变性条件", 0) == [ListItem(point="", detail="C8 反相柱，变性条件")]
+
+
+def test_a_missing_list_value_is_empty():
+    assert normalize_list_value(None, 0) == []
+    assert normalize_list_value("", 0) == []
+    assert normalize_list_value([], 0) == []
+
+
+def test_items_without_any_text_are_dropped():
+    assert normalize_list_value([{"point": "", "detail": ""}, {"point": "柱", "detail": ""}], 0) == [
+        ListItem(point="柱", detail="")
+    ]
+
+
+def test_max_items_truncates():
+    raw = [{"point": f"P{i}", "detail": "d"} for i in range(6)]
+    assert len(normalize_list_value(raw, 3)) == 3
+
+
+def test_zero_max_items_means_no_limit():
+    raw = [{"point": f"P{i}", "detail": "d"} for i in range(6)]
+    assert len(normalize_list_value(raw, 0)) == 6
+
+
+def test_extraction_returns_list_items_for_a_list_field():
+    payload = json.dumps(
+        {"background": "抗体电荷异质性", "method": [{"point": "柱", "detail": "C8"}]}, ensure_ascii=False
+    )
+    result = extract_paper(make_paper(), stub_client(payload), LLM_PARAMS, LIST_FIELDS)
+    assert result["background"] == "抗体电荷异质性"
+    assert result["method"] == [ListItem(point="柱", detail="C8")]
+
+
+def test_a_failed_extraction_returns_the_right_empty_shape():
+    def boom(**kwargs):
+        raise RuntimeError("down")
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=boom)))
+    result = extract_paper(make_paper(), client, LLM_PARAMS, LIST_FIELDS)
+    assert result == {"background": "", "method": []}
+
+
+def test_the_prompt_names_the_modalities_triage_found():
+    calls: list = []
+    paper = make_paper()
+    paper.triage = TriageResult(relevance=88, reason="r", modalities=["ADC", "单抗"])
+    extract_paper(paper, stub_client(PAYLOAD, calls), LLM_PARAMS, LIST_FIELDS)
+    prompt = str(calls[0]["messages"])
+    assert "ADC" in prompt
+    assert "单抗" in prompt
+
+
+def test_a_paper_with_no_modalities_still_gets_a_usable_prompt():
+    # Method-transfer papers pass the gate with modalities == [].  Inventing
+    # a modality for them would put words in the model's mouth.
+    calls: list = []
+    paper = make_paper()
+    paper.triage = TriageResult(relevance=60, reason="r", modalities=[])
+    extract_paper(paper, stub_client(PAYLOAD, calls), LLM_PARAMS, LIST_FIELDS)
+    prompt = str(calls[0]["messages"])
+    assert "迁移" in prompt
+
+
+def test_an_untriaged_paper_extracts_without_raising():
+    result = extract_paper(make_paper(), stub_client(PAYLOAD), LLM_PARAMS, LIST_FIELDS)
+    assert result["background"] == "单抗电荷异质性"
+
+
+def test_the_prompt_asks_for_an_array_only_for_list_fields():
+    calls: list = []
+    extract_paper(make_paper(), stub_client(PAYLOAD, calls), LLM_PARAMS, LIST_FIELDS)
+    prompt = str(calls[0]["messages"])
+    assert '"method":[' in prompt.replace(" ", "")
+    assert '"background":"' in prompt.replace(" ", "")
