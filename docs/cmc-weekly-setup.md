@@ -103,7 +103,7 @@ zhang@qq.com, li@yourcompany.com, wang@outlook.com
 
 （三个新 workflow 实测都是 `active` 状态，不需要手动启用。若你的环境显示被禁用，先点 Enable。）
 
-**实测输出**（2026-08-21，run 32494340286）：
+**实测输出**（2026-08-22，run 32548936193，耗时 51 秒）：
 
 ```
 Preflight
@@ -112,8 +112,9 @@ Preflight
 [ OK ] llm          deepseek-v4-flash answered (中文)
 [ OK ] pubmed       2 probe results
 [ OK ] europepmc    2 probe results
-[ OK ] crossref     1 probe results
-[ OK ] openalex     1 probe results
+[ OK ] crossref     2 probe results
+[ OK ] openalex     2 probe results
+[ OK ] embedding    BAAI/bge-m3 returned a 1024-dim vector
 [ OK ] recipients   2 recipients, all Bcc
 [ OK ] smtp         smtp.gmail.com accepted the login
 ────────────────────────────────────────────────────────────
@@ -121,6 +122,8 @@ PASS — every check succeeded
 ```
 
 这次实测确认了四个查询式检索器在**真实 API** 上都能正确解析响应。整个探测耗时 26 秒。
+
+> **`embedding` 一行证明的是你的 embedding key 真的能调通**，不只是配置解析成功。一个写错的 `EMBEDDING_API_KEY` 插值一样成功、配置一样组装得起来，其余每一项都会报绿，然后在周报跑到重排那步才崩——那已经是十分钟之后，聚类和检索式蒸馏的 LLM 调用都花掉了。
 
 > **预检探测用的检索式，与周报实际下发的是同一套。** 首跑时不是这样——预检用两个词的短查询，周报下发的是十几个词的长句，结果 Europe PMC 与 OpenAlex 在预检全绿的情况下于正式跑中返回 0 篇。现在探测走 `query_for_source()` 同一条路径，这个盲区已封死。
 
