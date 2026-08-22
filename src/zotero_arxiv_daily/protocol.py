@@ -9,6 +9,7 @@ import json
 
 if TYPE_CHECKING:
     from .triage import TriageResult
+    from .scoring import ScoreBreakdown
 
 RawPaperItem = TypeVar('RawPaperItem')
 
@@ -41,6 +42,7 @@ class Paper:
     # reports an institution type, so for them this stays empty.
     company_institutions: list[str] = field(default_factory=list)
     triage: Optional["TriageResult"] = None
+    scoring: Optional["ScoreBreakdown"] = None
 
     @property
     def doi_url(self) -> Optional[str]:

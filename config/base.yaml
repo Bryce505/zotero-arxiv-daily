@@ -83,6 +83,141 @@ report:
   max_papers: 25           # Hard ceiling on the digest length.
   top_picks: 3             # Size of the "read these first" section.
   min_per_cluster: 1       # Floor so a small theme is never crowded out.
+  # —— 相关性闸门 ——
+  min_relevance: 55        # 分诊给出的原始相关度下限。期刊/企业加分不能突破这条线。
+  min_score: 60            # 综合分下限 = 相关度 + 期刊加分 + 企业加分。
+  triage_pool: 60          # 送去分诊的候选上限，按嵌入相似度取前 N。候选不足则全送。
+  triage_batch: 8          # 每次分诊调用处理几篇。调小更稳，调大更省。
+  journals:
+    bonus: 10              # 期刊命中下面名单时加多少分。
+    allow:
+      # 生物药与制剂
+      - mAbs
+      - Antibody Therapeutics
+      - Antibodies
+      - BioDrugs
+      - Biologicals
+      - Bioconjugate Chemistry
+      - Molecular Pharmaceutics
+      - Journal of Pharmaceutical Sciences
+      - Journal of Pharmaceutical and Biomedical Analysis
+      - Journal of Pharmaceutical Analysis
+      - European Journal of Pharmaceutics and Biopharmaceutics
+      - International Journal of Pharmaceutics
+      - Pharmaceutical Research
+      - Pharmaceutics
+      - AAPS Journal
+      - AAPS PharmSciTech
+      - PDA Journal of Pharmaceutical Science and Technology
+      - Current Pharmaceutical Biotechnology
+      # 生物工艺与生物技术
+      - Biotechnology and Bioengineering
+      - Biotechnology Progress
+      - Biotechnology Journal
+      - Journal of Biotechnology
+      - New Biotechnology
+      - Nature Biotechnology
+      - Frontiers in Bioengineering and Biotechnology
+      - Bioengineering
+      # 分析化学、色谱与质谱
+      - Analytical Chemistry
+      - Analytical Biochemistry
+      - Analytica Chimica Acta
+      - Analytical and Bioanalytical Chemistry
+      - Annual Review of Analytical Chemistry
+      - Analyst
+      - Talanta
+      - Journal of Chromatography A
+      - Journal of Chromatography B
+      - Journal of Separation Science
+      - Separations
+      - Electrophoresis
+      - Journal of the American Society for Mass Spectrometry
+      - Journal of Mass Spectrometry
+      - Mass Spectrometry Reviews
+      - Bioanalysis
+      # 蛋白质、糖生物学与组学
+      - Journal of Proteome Research
+      - Molecular and Cellular Proteomics
+      - Proteomics
+      - Journal of Proteomics
+      - Protein Science
+      - Protein Expression and Purification
+      - Glycobiology
+      - Journal of Biological Chemistry
+      - Biophysical Journal
+      # 免疫与疫苗
+      - Journal of Immunological Methods
+      - Vaccine
+      - Vaccines
+      - Human Vaccines and Immunotherapeutics
+      # 综合与方法学
+      - Nature Communications
+      - Nature Methods
+      - Nature Protocols
+      - Nature Reviews Drug Discovery
+      - Proceedings of the National Academy of Sciences
+      - Journal of the American Chemical Society
+      - Chemical Reviews
+      - PLoS ONE
+  industry:
+    bonus: 8              # 作者单位命中下面名单时加多少分。
+    names:
+      # 跨国生物制药
+      - Amgen
+      - Merck
+      - MSD
+      - Pfizer
+      - Bristol Myers Squibb
+      - Genentech
+      - Roche
+      - Novartis
+      - Sanofi
+      - AstraZeneca
+      - GlaxoSmithKline
+      - GSK
+      - Johnson and Johnson
+      - Janssen
+      - Eli Lilly
+      - AbbVie
+      - Biogen
+      - Regeneron
+      - Moderna
+      - BioNTech
+      - Takeda
+      - Bayer
+      - Boehringer Ingelheim
+      - Novo Nordisk
+      - CSL Behring
+      - Grifols
+      - Daiichi Sankyo
+      - Astellas
+      - Alexion
+      - Vertex
+      - Gilead
+      - Seagen
+      - Alnylam
+      - Ionis
+      # CDMO 与上游供应商
+      - Lonza
+      - Samsung Biologics
+      - WuXi Biologics
+      - Catalent
+      - Thermo Fisher
+      - Sartorius
+      - Cytiva
+      - Repligen
+      # 国内生物药企
+      - Hengrui
+      - Innovent
+      - BeiGene
+      - Henlius
+      - Junshi
+      - RemeGen
+      - Akeso
+      - Zai Lab
+      - CanSino
+      - Sunshine Guojian
   attach_pdfs: 5           # How many PDFs to attach to the email; the rest stay archived.
   output_dir: '.'          # Root the artefacts are written under.
   fields:                  # Drives both the extraction prompt and the rendered output.
