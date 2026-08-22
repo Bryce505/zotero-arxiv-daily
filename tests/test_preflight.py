@@ -438,3 +438,89 @@ class TestCheckEmbedding:
         )
         _, results = run_preflight(self._config())
         assert "embedding" in [r.name for r in results]
+
+
+# ------------------------------------------------------------- report config
+
+from zotero_arxiv_daily.preflight import check_report_config
+
+
+def _ok(name: str) -> CheckResult:
+    return CheckResult(name=name, ok=True, detail="stub")
+
+
+def report_config(**overrides):
+    report = {
+        "min_relevance": 55,
+        "min_score": 60,
+        "triage_pool": 60,
+        "triage_batch": 8,
+        "journals": {"bonus": 10, "allow": ["mAbs", "Separations"]},
+        "industry": {"bonus": 8, "names": ["Amgen"]},
+        "fields": [
+            {"key": "background", "label": "背景", "instruction": "i"},
+            {"key": "method", "label": "方法", "instruction": "i", "kind": "list", "max_items": 5},
+        ],
+    }
+    report.update(overrides)
+    return OmegaConf.create({"report": report})
+
+
+def test_a_well_formed_report_config_passes():
+    result = check_report_config(report_config())
+    assert result.ok
+    assert "2 journals" in result.detail
+    assert "1 companies" in result.detail
+
+
+def test_a_journal_list_that_is_not_a_list_fails():
+    # What a mis-indented YAML edit actually produces.
+    result = check_report_config(report_config(journals={"bonus": 10, "allow": "mAbs"}))
+    assert not result.ok
+    assert "allow" in result.detail
+
+
+def test_an_unknown_field_kind_fails():
+    fields = [{"key": "method", "label": "方法", "instruction": "i", "kind": "bullets"}]
+    result = check_report_config(report_config(fields=fields))
+    assert not result.ok
+    assert "bullets" in result.detail
+
+
+def test_a_negative_threshold_fails():
+    assert not check_report_config(report_config(min_relevance=-1)).ok
+
+
+def test_a_zero_triage_batch_fails():
+    assert not check_report_config(report_config(triage_batch=0)).ok
+
+
+def test_zeroed_thresholds_are_allowed():
+    # Setting both to 0 is the documented way to disable the gate.
+    assert check_report_config(report_config(min_relevance=0, min_score=0)).ok
+
+
+def test_empty_name_lists_are_allowed():
+    result = check_report_config(report_config(journals={"bonus": 10, "allow": []}))
+    assert result.ok
+
+
+def test_a_duplicate_journal_warns_without_failing():
+    # Hand-maintaining 63 lines makes a paste duplicate near certain, and a
+    # duplicate is harmless — bonuses do not stack — so it must not block a run.
+    config = report_config(journals={"bonus": 10, "allow": ["mAbs", "The MAbs"]})
+    result = check_report_config(config)
+    assert result.ok
+    assert result.warning
+    assert "mabs" in result.detail.lower()
+
+
+def test_report_config_is_part_of_the_preflight_run(config, monkeypatch):
+    monkeypatch.setattr("zotero_arxiv_daily.preflight.check_zotero", lambda c: _ok("zotero"))
+    monkeypatch.setattr("zotero_arxiv_daily.preflight.check_llm", lambda c: _ok("llm"))
+    monkeypatch.setattr("zotero_arxiv_daily.preflight.check_sources", lambda c: [])
+    monkeypatch.setattr("zotero_arxiv_daily.preflight.check_embedding", lambda c: _ok("embedding"))
+    monkeypatch.setattr("zotero_arxiv_daily.preflight.check_recipients", lambda c: _ok("recipients"))
+    monkeypatch.setattr("zotero_arxiv_daily.preflight.check_smtp", lambda c: _ok("smtp"))
+    _, results = run_preflight(config)
+    assert any(r.name == "report-config" for r in results)

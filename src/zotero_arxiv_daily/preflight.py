@@ -200,6 +200,75 @@ def check_smtp(config: DictConfig) -> CheckResult:
     return CheckResult(name="smtp", ok=True, detail=f"{settings.smtp_server} accepted the login")
 
 
+_VALID_FIELD_KINDS = frozenset({"text", "list"})
+_NON_NEGATIVE_KEYS = ("min_relevance", "min_score", "triage_pool")
+
+
+def _name_list(block, key: str, problems: list[str]) -> list[str]:
+    """Read one curated name list, complaining if the YAML edit went wrong."""
+    raw = _safe_get(block, key)
+    if raw is None:
+        return []
+    if isinstance(raw, str) or not hasattr(raw, "__iter__"):
+        problems.append(f"{key} must be a list, got {type(raw).__name__}")
+        return []
+    return [str(n) for n in raw]
+
+
+def check_report_config(config: DictConfig) -> CheckResult:
+    """Validate the parts of ``report`` the operator hand-edits.
+
+    Every other check probes a remote boundary.  This one probes the file the
+    operator most recently touched: the curated lists and report fields moved
+    into ``config/base.yaml`` precisely because they are edited by hand, and a
+    mis-indented list is otherwise discovered on a Friday, mid-send.
+    """
+    from .affiliation import normalize
+
+    report = _safe_get(config, "report") or {}
+    problems: list[str] = []
+    warnings: list[str] = []
+
+    journals = _name_list(_safe_get(report, "journals") or {}, "allow", problems)
+    companies = _name_list(_safe_get(report, "industry") or {}, "names", problems)
+
+    for label, names in (("journals", journals), ("companies", companies)):
+        seen: dict[str, str] = {}
+        for name in names:
+            key = normalize(name)
+            if key and key in seen:
+                warnings.append(f"{label}: {name!r} duplicates {seen[key]!r}")
+            seen[key] = name
+
+    for key in _NON_NEGATIVE_KEYS:
+        value = _safe_get(report, key)
+        if value is not None and (not isinstance(value, int) or value < 0):
+            problems.append(f"{key} must be a non-negative integer, got {value!r}")
+    batch = _safe_get(report, "triage_batch")
+    if batch is not None and (not isinstance(batch, int) or batch < 1):
+        problems.append(f"triage_batch must be at least 1, got {batch!r}")
+
+    kinds = {"text": 0, "list": 0}
+    for field in _safe_get(report, "fields") or []:
+        kind = str(_safe_get(field, "kind") or "text")
+        if kind not in _VALID_FIELD_KINDS:
+            problems.append(f"field {_safe_get(field, 'key')!r} has unknown kind {kind!r}")
+        else:
+            kinds[kind] += 1
+
+    if problems:
+        return CheckResult(name="report-config", ok=False, detail="; ".join(problems))
+    detail = (
+        f"{len(journals)} journals, {len(companies)} companies, "
+        f"{kinds['text'] + kinds['list']} fields ({kinds['text']} text / {kinds['list']} list)"
+    )
+    if warnings:
+        return CheckResult(
+            name="report-config", ok=True, warning=True, detail=f"{detail}; {'; '.join(warnings)}"
+        )
+    return CheckResult(name="report-config", ok=True, detail=detail)
+
+
 def check_recipients(config: DictConfig) -> CheckResult:
     recipients = resolve_recipients(config.email)
     if not recipients:
@@ -213,7 +282,7 @@ def check_recipients(config: DictConfig) -> CheckResult:
 
 def run_preflight(config: DictConfig) -> tuple[bool, list[CheckResult]]:
     """Run every check. Returns ``(everything_passed, results)``."""
-    results = [check_zotero(config), check_llm(config)]
+    results = [check_report_config(config), check_zotero(config), check_llm(config)]
     results.extend(check_sources(config))
     results.extend([check_embedding(config), check_recipients(config), check_smtp(config)])
     return all(r.ok for r in results), results
