@@ -85,6 +85,8 @@ LLM 分诊（相关度 0–100 + 推荐理由 + 命中的生物药类型）
 抓取开放获取全文 → 结构化抽取（携带分诊结论）→ 渲染 → 邮件 + 归档进仓库
 ```
 
+「主题归类」不是纯粹的向量最近邻：候选文献落进哪个簇，由「和簇内语料成员的平均相似度」与「和簇的一句话主题描述的相似度」加权得出，后者权重更高（默认 0.6，`search.cluster_assignment_description_weight`）——语料均值是弥散信号，容易被词面重合带偏；主题描述是更精确的锚点，见第 5 节的实例。
+
 **三套插件式注册表：**
 
 | 注册表 | 装饰器 | 查找函数 | 服务谁 | 现有实现 |
@@ -129,6 +131,8 @@ LLM 分诊（相关度 0–100 + 推荐理由 + 命中的生物药类型）
 **钠离子电池那篇会在哪一步被拦下。** 那一期混进了一篇《The First Electrochemical Cycle: State-of-Charge Dependent Formation and Evolution of the Solid Electrolyte Interphase on Hard Carbon Anodes in Sodium-Ion Batteries》（*Small Methods*，2026-08-14，Schäfer David et al.，DOI `10.1002/smtd.70958`），讲的是钠离子电池硬碳负极固态电解质界面（SEI）的形成过程，与生物药 CMC 没有任何关系。它当初能混进来，是因为「多模式原位表征」一类的词面特征让嵌入相似度误判成了「和你的色谱/质谱文献库像」。分诊评分细则里，`0–19`（无关）档明确把「电池材料」列为必须打低分的反例，这篇会落在这一档；`report.min_relevance: 55` 直接拦下它——期刊加分、企业加分都救不了，这条硬下限就是为这类稿子设的。
 
 **ADC 那篇为什么排在第一。** 同一期「本周优先读」第一条就是第 1 节引用的那篇 ADC 分析方法论文（*Separations*，DOI `10.3390/separations13080236`）。研究对象本身是抗体药物偶联物（ADC），落在分诊细则 `80–100`（高）档；同时它发在 *Separations*——这本刊在 `report.journals.allow` 名单里，命中后综合分再加 `report.journals.bonus`（默认 10 分）。相关度本身就高，又叠加了期刊命中，两项一起让它在综合分排序里稳居第一，配额分配时自然优先拿到名额。
+
+**壳聚糖酶那篇为什么被分进了「宿主细胞蛋白分析」。** 这是闸门上线**之后**实测发现的第二个问题：一篇讲疫苗效力检测（用壳聚糖酶消除壳聚糖佐剂对效价测定的干扰）的论文，正确通过了闸门（相关度 92，命中企业加分），但被归到了「宿主细胞蛋白（HCP）分析」这个簇下——内容跟 HCP 毫无关系。根因是当时候选归簇纯靠候选文献和簇内语料成员的**平均**相似度决定，而这个簇里恰好聚了不少讲蛋白质定量分析方法的文献，词面上的方法学重合把它带偏了。现在候选归簇同时看簇的**一句话主题描述**（「宿主细胞蛋白残留检测与定量分析」之类，聚类时 LLM 生成、以前生成了但没用上），且这个信号权重更高（默认 0.6）——这篇论文的摘要跟「疫苗」「佐剂」「效力检测」相关的簇描述会更接近，归簇结果理应随之改善。
 
 ### 调参对照表
 
@@ -199,7 +203,7 @@ OmegaConf.merge(base, custom).report.journals
 | `llm` | 两条都用 | API key/base_url、生成参数、`language`（周报默认中文摘要要显式设成 `中文`） |
 | `reranker` | 两条共用 `executor.reranker` 选择 `local`/`api`；`vector_cache` 是周报专用的语料向量缓存路径 | 本地模型或 embedding API 的参数 |
 | `executor` | 日报为主 | `source` 选用哪些日报检索器、`reranker` 选择、`max_paper_num` 等 |
-| `search` | 周报专用 | `sources`（四个查询源）、`n_clusters`、`per_cluster_limit`、三个缓存文件路径 |
+| `search` | 周报专用 | `sources`（四个查询源）、`n_clusters`、`per_cluster_limit`、`cluster_assignment_description_weight`（候选归簇时主题描述信号的权重，见第 3 节）、三个缓存文件路径 |
 | `fulltext` | 周报专用 | 是否尝试抓开放获取全文、`unpaywall_email`、单文件大小上限 |
 | `report` | 周报专用，**新手最常改的部分** | 数量控制（`min_papers`/`max_papers`/`top_picks`/`min_per_cluster`）、闸门（`min_relevance`/`min_score`/`triage_pool`/`triage_batch`，见第 5 节）、`journals`/`industry` 两份加分名单（见第 6 节的列表陷阱）、`fields` 报告字段定义（见下） |
 | `git` | 周报/月度综述 | 是否把产物提交回仓库、提交用的 user.name/email |
@@ -261,13 +265,17 @@ OmegaConf.merge(base, custom).report.journals
 
 ```
 reports/2026/2026-08-W3.md      周报 markdown（归档进仓库）
-reports/2026/2026-08-W3.html    周报网页版（归档 + 邮件附件）
-library/2026/2026-08-W3/*.pdf   当周抓到的开放获取全文
+reports/2026/2026-08-W3.html    周报网页版（归档，左侧目录+编号，见下）
+library/2026/2026-08-W3/*.pdf   当周抓到的开放获取全文（见下的命名规则）
 state/theme_clusters.json       主题聚类缓存
 state/query_profiles.json       检索式蒸馏缓存
 state/seen_dois.json            跨周去重记录
 state/corpus_vectors.npz        语料 embedding 缓存（配置了 reranker.vector_cache 才有）
 ```
+
+**网页版带左侧目录。** 每篇文献按阅读顺序（本周优先读 → 各主题簇 → 经典补位）编号 `#1`、`#2`……同一篇文献在多处出现（比如既是优先读又在自己的主题簇里）复用同一个号，不会重复编号。左侧是吸顶的侧栏目录，按分节列出全部文献，点击跳转到正文对应位置；窄屏（<860px）会自动收起成顶部横条。这个设计权衡过用带书签的 PDF 代替 HTML——同样内容 PDF 比 HTML 大出 60 倍以上（未优化字体嵌入时甚至到 4MB+），周报要按周提交进仓库、逐周累积，所以留在了 HTML。邮件正文不受影响，仍是线性滚动的摘要式布局。
+
+**PDF 文件名是「年份-第一作者-标题」，不是 DOI。** 例如 `2026-Zhang_Wei-Charge_Variant_Analysis_of_Monoclonal_Antibodies-a3f9c2.pdf`，末尾一段短哈希（多数取自 DOI）防止同作者同年、标题前 80 字重合的两篇文献互相覆盖，也让同一篇文献重跑时文件名保持不变。缺年份/作者时分别退化成 `unknown`；标题、作者、发表日期都拿不到的极端情况退回 `paper-{序号}.pdf`。这个命名只影响新下载的文件，`library/` 目录里已归档的旧文件（DOI 命名）不会被重命名。
 
 **为什么要提交回仓库：** GitHub Actions 的 runner 是一次性的，任务结束即销毁。三个缓存、去重记录、周报本身如果只留在 runner 本地，下一次运行就凭空消失——聚类和检索式蒸馏得重新跑一遍 LLM，去重记录归零会导致往期文献重复推送。`git.enabled: true` 时，`weekly.py` 在发信之后把这些路径 commit 并 push 回触发它的分支；push 失败会让整个 run 直接失败（不会被静默吞掉，见第 11 节），因为 runner 销毁后仓库里的这份 commit 是唯一副本。
 
