@@ -230,17 +230,33 @@ rank_score >= report.min_score         # 综合择优线，加分在这里生效
 
 ### 6.2 名单匹配 `src/zotero_arxiv_daily/affiliation.py`
 
-期刊名混乱（`Molecular & cellular proteomics : MCP`、`mAbs` vs `MAbs`、`J Pharm Sci`），需要归一化：
+期刊名在各源之间形态混乱：`Molecular & cellular proteomics : MCP`、`mAbs` vs `MAbs`、`The Journal of biological chemistry` vs `Journal of Biological Chemistry`。
 
 ```python
+_DROPPED = frozenset({"the", "and"})
+
 def normalize(text: str) -> str:
-    """小写、非字母数字转空格、折叠空白。"""
+    """小写 → 非字母数字转空格 → 丢弃 the/and → 折叠空白。"""
 
 def match_name(text: str, names: list[str]) -> str | None:
     """名单项以完整词序列出现在单条 text 中则返回该项，否则 None。"""
 ```
 
 匹配用**空格填充后的子串包含**（`f" {entry} " in f" {text} "`），避免 `mabs` 误命中 `mabsorption` 一类。返回命中的名单项本身，使徽标能显示「企业研究（Amgen）」。
+
+**为什么要丢弃 `the` / `and`。** 这不是可有可无的润色，不做匹配就会静默失效：
+
+| 期刊实际字符串 | 仅转空格后 | 名单项 | 结果 |
+| --- | --- | --- | --- |
+| `Molecular & cellular proteomics : MCP` | `molecular cellular proteomics mcp` | `molecular and cellular proteomics` | **不命中** |
+| `Biotechnology and Bioengineering` | `biotechnology and bioengineering` | `biotechnology bioengineering` | **不命中** |
+| `The Journal of biological chemistry` | `the journal of biological chemistry` | `journal of biological chemistry` | **不命中** |
+
+`&` 转空格后留下的是「缺一个词」，而名单项里通常写着 `and`——两侧刚好错开。丢弃这两个虚词后三行全部命中。归一化对两侧同样施加，因此只会放宽匹配，不会制造跨边界误命中。
+
+`of` 保留：它在 `Journal of X` 里两侧都稳定出现，丢掉只会增加误命中面。
+
+**名单一律写全称。** `PNAS`、`J. Am. Chem. Soc.` 这类缩写与检索源返回的全称无字面重合，永远匹配不上。
 
 不支持 glob：词序列包含已足够，多一层语法只增加配置出错面。
 
@@ -344,6 +360,48 @@ def is_industry(paper: Paper, names: list[str]) -> str | None:
 
 ## 11. 配置契约
 
+### 11.0 配置放在哪里
+
+仓库有两层配置，运行时由 Hydra 合并（`config/default.yaml` 的 `defaults: [base, custom]`）：
+
+| 文件 | 来源 | 用途 |
+| --- | --- | --- |
+| `config/base.yaml` | 提交在 git 里 | 默认值、长名单、报告字段 |
+| `config/custom.yaml` | **每次运行被覆写** | 引用 secrets 的项、机器相关设置 |
+
+工作流里这一行决定了后者：
+
+```yaml
+printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
+```
+
+即仓库里那份 `config/custom.yaml` 在 CI 中**完全无效**，实际生效的是 GitHub Variables 的 `CUSTOM_CONFIG`。
+
+**关键约束：OmegaConf 合并时字典逐键合并，列表整体替换。** 实测：
+
+```python
+base   = {"report": {"journals": {"bonus": 10, "allow": ["mAbs", "Analytical Chemistry", "Separations"]}}}
+custom = {"report": {"journals": {"allow": ["Nature"]}}}
+OmegaConf.merge(base, custom).report.journals
+# → {"bonus": 10, "allow": ["Nature"]}     ← 三本刊全没了，bonus 还在
+```
+
+因此**三份长内容必须放 `config/base.yaml`**：
+
+| 内容 | 位置 | 理由 |
+| --- | --- | --- |
+| `report.journals.allow`（63 本） | `base.yaml` | 放 CUSTOM_CONFIG 则加一本刊要重贴全部，漏一本静默丢一本 |
+| `report.industry.names`（52 家） | `base.yaml` | 同上 |
+| `report.fields`（报告字段） | `base.yaml` | 同上；且现状已如此，不引入新规矩 |
+| `min_relevance` / `min_score` 等阈值 | 两处皆可 | 单个标量，列表语义不适用；放 `base.yaml` 可获得 diff 历史 |
+| `${oc.env:...}` 的项 | `CUSTOM_CONFIG` | 密钥不能提交进仓库 |
+
+**修改方式**：GitHub 网页打开 `config/base.yaml` → 铅笔图标 → 编辑 → commit。网页编辑器识别 YAML，缩进错误会标红；Variables 的纯文本框没有这层保护。
+
+**改完必须跑一次 preflight**（见 13.1）。`${{ vars.CUSTOM_CONFIG }}` 在 job 启动那一刻解析完毕，改 Variables 不影响正在运行的 job；改 `base.yaml` 同理，workflow checkout 的是触发时的 commit。
+
+### 11.1 报告新增键
+
 ```yaml
 report:
   min_papers: 15
@@ -359,11 +417,11 @@ report:
 
   journals:
     bonus: 10              # 命中名单的加分
-    allow: [ ... ]         # 见 11.1
+    allow: [ ... ]         # 见 11.2
 
   industry:
     bonus: 8               # 命中企业的加分
-    names: [ ... ]         # 见 11.2
+    names: [ ... ]         # 见 11.3
 ```
 
 `journals.allow` 或 `industry.names` 为空/缺省时，对应加分恒为 0——名单是可选增强，不是运行前提。
@@ -371,7 +429,7 @@ report:
 
 排在 `triage_pool` 之外的候选（嵌入分最低的那批）直接淘汰，不做分诊。这是成本上限，不是质量判断——它们本就是相似度最低的一批。
 
-### 11.1 期刊名单（默认值，可自行增删）
+### 11.2 期刊名单（默认值，可自行增删）
 
 ```yaml
 allow:
@@ -385,6 +443,7 @@ allow:
   - Molecular Pharmaceutics
   - Journal of Pharmaceutical Sciences
   - Journal of Pharmaceutical and Biomedical Analysis
+  - Journal of Pharmaceutical Analysis
   - European Journal of Pharmaceutics and Biopharmaceutics
   - International Journal of Pharmaceutics
   - Pharmaceutical Research
@@ -392,6 +451,7 @@ allow:
   - AAPS Journal
   - AAPS PharmSciTech
   - PDA Journal of Pharmaceutical Science and Technology
+  - Current Pharmaceutical Biotechnology
   # 生物工艺与生物技术
   - Biotechnology and Bioengineering
   - Biotechnology Progress
@@ -400,11 +460,15 @@ allow:
   - New Biotechnology
   - Nature Biotechnology
   - Frontiers in Bioengineering and Biotechnology
+  - Bioengineering
   # 分析化学、色谱与质谱
   - Analytical Chemistry
+  - Analytical Biochemistry
   - Analytica Chimica Acta
   - Analytical and Bioanalytical Chemistry
+  - Annual Review of Analytical Chemistry
   - Analyst
+  - Talanta
   - Journal of Chromatography A
   - Journal of Chromatography B
   - Journal of Separation Science
@@ -412,27 +476,47 @@ allow:
   - Electrophoresis
   - Journal of the American Society for Mass Spectrometry
   - Journal of Mass Spectrometry
+  - Mass Spectrometry Reviews
   - Bioanalysis
   # 蛋白质、糖生物学与组学
   - Journal of Proteome Research
   - Molecular and Cellular Proteomics
   - Proteomics
+  - Journal of Proteomics
   - Protein Science
   - Protein Expression and Purification
   - Glycobiology
   - Journal of Biological Chemistry
+  - Biophysical Journal
   # 免疫与疫苗
   - Journal of Immunological Methods
   - Vaccine
   - Vaccines
   - Human Vaccines and Immunotherapeutics
-  # 综合
+  # 综合与方法学
   - Nature Communications
+  - Nature Methods
+  - Nature Protocols
+  - Nature Reviews Drug Discovery
+  - Proceedings of the National Academy of Sciences
+  - Journal of the American Chemical Society
+  - Chemical Reviews
+  - PLoS ONE
 ```
 
-**说明**：`Molecular and Cellular Proteomics` 与 `Human Vaccines and Immunotherapeutics` 写成 `and` 形式——归一化会把 `&` 转成空格，两种写法都能命中。首期最好的那篇 ADC 论文发在 MDPI 的 *Separations*，已收入名单；这正是选「强加分」而非「硬过滤」的现实理由：任何手写名单都会漏。
+**来源**：基础名单 + 使用者提供的既有订阅清单，合并去重（2026-08-22）。
 
-### 11.2 企业名单（默认值，可自行增删）
+**收录规则**：
+
+- **一律写全称，不写缩写。** 检索源返回的是 `Proceedings of the National Academy of Sciences of the United States of America`，不是 `PNAS`；是 `Journal of the American Chemical Society`，不是 `J. Am. Chem. Soc.`。缩写永远匹配不上。
+- `and` / `the` 由归一化统一丢弃（见 6.2），所以 `Molecular and Cellular Proteomics` 能命中 `Molecular & cellular proteomics : MCP`。
+- 允许冗余项：`Bioengineering` 会顺带命中 `Biotechnology and Bioengineering`，`Analytical Chemistry` 会顺带命中 `Annual Review of Analytical Chemistry`。这是词序列包含匹配的正常行为，加分不叠加，无害。
+
+**已知取舍**：`PLoS ONE`、`Nature Communications`、`Proceedings of the National Academy of Sciences`、`Chemical Reviews`、`Journal of the American Chemical Society` 都是覆盖全学科的大刊，+10 分对「选题是否相关」几乎不提供信息量。它们仍须先过 `min_relevance ≥ 55` 才可能进周报，危害有界；保留是因为使用者确实在读这些刊。若日后发现这几本带进噪声，单独移除即可，不影响机制。
+
+首期最好的那篇 ADC 论文发在 MDPI 的 *Separations*，已收入名单——这正是选「强加分」而非「硬过滤」的现实理由：任何手写名单都会漏。
+
+### 11.3 企业名单（默认值，可自行增删）
 
 ```yaml
 names:
@@ -495,7 +579,7 @@ names:
 
 国内企业按检索源实际给出的英文名收录（`WuXi Biologics`、`BeiGene` 等），中文名不进名单——PubMed/OpenAlex 的单位字符串均为英文。
 
-### 11.3 报告字段（重写）
+### 11.4 报告字段（重写）
 
 ```yaml
 fields:
@@ -561,6 +645,31 @@ fields:
 
 ## 13. 测试策略
 
+### 13.1 新增 preflight 检查：`check_report_config`
+
+现有 6 项检查（zotero / llm / embedding / sources / smtp / recipients）都在探测**外部边界**，没有一项校验配置本身。名单和字段现在放进 `base.yaml` 由使用者手工编辑，YAML 缩进打错会在周五发信时才炸——这类错误必须在预检就红。
+
+```python
+def check_report_config(config: DictConfig) -> CheckResult:
+```
+
+断言：
+
+1. `report.journals.allow` 与 `report.industry.names` 可解析且为列表（空列表允许，非列表报错）
+2. 每个 `report.fields` 项的 `kind` ∈ {`text`, `list`}
+3. `min_relevance` / `min_score` / `triage_pool` / `triage_batch` 均为非负整数，且 `triage_batch >= 1`
+4. 名单内**归一化后重复**的条目——报 WARNING 而非 FAIL，并列出重复项
+
+第 4 条是给使用者的实用反馈：手工维护 63 行名单，粘重复几乎必然发生，而重复项本身无害（加分不叠加），所以只提示不阻断。
+
+输出示例：
+
+```
+report-config    OK   63 journals, 52 companies, 5 fields (2 text / 3 list)
+```
+
+### 13.2 单元测试
+
 沿用既有约定：禁用 `unittest.mock`，一律 `pytest monkeypatch` + `SimpleNamespace` + `tests/canned_responses.py`。
 
 **新增测试文件**
@@ -568,7 +677,7 @@ fields:
 | 文件 | 覆盖 |
 | --- | --- |
 | `tests/test_triage.py` | 批量协议解析、index 回填、乱序/缺项、重试与逐篇降级、全失败置 None |
-| `tests/test_affiliation.py` | 归一化、词序列匹配、`mabs` 不误命中、`&` 与 `and` 等价、企业两条触发路径 |
+| `tests/test_affiliation.py` | 归一化丢弃 `the`/`and`；6.2 表格三行**作为回归用例逐条断言**；`mabs` 不误命中 `mabsorption`；企业两条触发路径 |
 | `tests/test_scoring.py` | 综合分计算；两道闸门各自生效；**加分不能把低于 `min_relevance` 的文献抬进来** |
 
 **扩充既有测试**
@@ -577,7 +686,8 @@ fields:
 - `tests/test_report.py`：三个渲染器的有序列表与徽标行、`triage is None` 时省略徽标
 - `tests/test_weekly.py`：闸门位于配额之前（构造一个主题只有 1 篇过闸的场景，断言不会凑数）
 - `tests/test_backfill.py`：补位候选经过分诊、未过闸的不进结果
-- `tests/test_setup_doc.py`：新增配置键在文档中有对应说明
+- `tests/test_setup_doc.py`：新增配置键在 README 中有对应说明
+- `tests/test_preflight.py`：`check_report_config` 的四类断言各一例（含缩进错误导致的非列表）
 
 **回归底线**：既有 421 项测试全部保持通过（`tests/test_protocol.py` 中 3 项 tiktoken 用例因沙箱内 `openaipublic.blob.core.windows.net` 被出口策略拒绝而失败，与本次改动无关，属既有状态）。
 
@@ -588,24 +698,55 @@ fields:
 现有 README 仍是上游 zotero-arxiv-daily 的说明，与本仓库实际能力已经脱节。目标读者：**新手 clone/fork 后照着配好参数就能跑通**。
 
 ```
-1. 这个项目做什么          一句话 + 一张周报截图式样例
-2. 它和上游 zotero-arxiv-daily 的关系   保留了什么、新增了什么
-3. 架构                    两条流水线（daily firehose / weekly digest）的图与阶段说明
-                           插件式注册表：retriever / query retriever / reranker
-4. 快速开始                fork → 配 Secrets/Variables → 跑预检 → 手动触发一次
-5. 配置详解                逐节讲 config：zotero / source / search / reranker /
-                           llm / report（含新增闸门与两份名单）/ fulltext / email / git
-                           每个参数：作用、默认值、怎么调、调错了会怎样
-6. 环境变量与 Secrets 清单  哪些必填、哪些可选、去哪里申请
-7. 预检                    preflight 逐项检查什么，输出怎么读
-8. 产物                    reports/ library/ state/ 各是什么、为什么要提交回仓库
-9. 排错                    空结果、相关度过低/过高、邮件被截断、推送失败
-10. 本地开发                uv sync / pytest / 加一个新检索源要动哪几处
+1.  这个项目做什么          一句话 + 一份周报样例节选
+2.  与上游 zotero-arxiv-daily 的关系   保留了什么、新增了什么
+3.  架构                    两条流水线（daily firehose / weekly digest）的阶段图
+                            插件式注册表：retriever / query retriever / reranker
+4.  快速开始                fork → 配 Secrets/Variables → 跑预检 → 手动触发一次
+5.  文章是怎么选出来的       ★ 本次新增，见 14.1
+6.  配置在哪里、怎么改       ★ 本次新增，见 14.2
+7.  配置详解                逐节讲 config 的每个参数
+8.  环境变量与 Secrets 清单  哪些必填、哪些可选、去哪里申请
+9.  预检                    7 项检查各自验证什么，输出怎么读
+10. 产物                    reports/ library/ state/ 各是什么、为什么提交回仓库
+11. 排错                    空结果、周报太薄/太杂、邮件被截断、推送失败
+12. 本地开发                uv sync / pytest / 加一个新检索源要动哪几处
 ```
 
-配置详解一节必须与 `config/base.yaml` 的注释保持一致——`tests/test_setup_doc.py` 已有守卫比对工作流导出的环境变量与文档中的 `${oc.env:...}`，本次扩充到新增配置键。
+### 14.1 「文章是怎么选出来的」一节
 
----
+使用者反馈的核心困惑是**看不懂周报里的文章凭什么进来**。这一节要把第 3 节那张漏斗图讲成人话，逐级给出「这一步淘汰了什么、由哪个参数控制」：
+
+| 阶段 | 淘汰了什么 | 参数 |
+| --- | --- | --- |
+| 主题聚类 + 检索式蒸馏 | —（决定检索什么） | `search.n_clusters` |
+| 多源检索 | — | `search.sources`、`search.per_cluster_limit` |
+| 去重 / 去已读 | 重复 DOI、库里已有、往期已投递 | `search.seen_state` |
+| 嵌入打分 | —（决定送分诊的优先级） | `executor.reranker` |
+| 送分诊 | 相似度最低的一批 | `report.triage_pool` |
+| **相关性分诊** | **与生物药无关的** | `report.triage_batch` |
+| **相关度硬下限** | **仅名词重合的** | `report.min_relevance` |
+| **综合分闸门** | **不够优的** | `report.min_score`、两个 `bonus` |
+| 主题配额 | 单主题过度集中的 | `report.max_papers`、`min_per_cluster` |
+| 经典补位 | —（补足数量） | `report.min_papers` |
+
+配一个具体例子走完全程，用首期真实数据：那篇钠离子电池论文在哪一步、因为什么被拦下（分诊给 0–19 分，`min_relevance: 55` 拦截），以及那篇 ADC 论文为什么排第一（相关度 + Separations 命中期刊名单 +10）。
+
+再给一张**调参对照表**——「周报太杂怎么办 / 太薄怎么办 / 某个方向总是漏怎么办」，每种症状指向该动哪个参数、往哪个方向动。
+
+### 14.2 「配置在哪里、怎么改」一节
+
+把 11.0 的内容写给不熟悉 Hydra 的读者，必须讲清三件事：
+
+1. **两层配置的分工**，以及仓库里那份 `config/custom.yaml` 在 CI 中为什么无效（工作流用 `CUSTOM_CONFIG` 覆写它）
+2. **列表整体替换的陷阱**——附上 11.0 那段实测代码。这是最容易让人默默丢掉半份名单的坑
+3. **两条修改路径的操作步骤**：
+   - 改名单/字段 → GitHub 网页编辑 `config/base.yaml` → commit → 跑 preflight
+   - 改密钥/收件人 → Settings → Secrets and variables → 编辑 `CUSTOM_CONFIG` → 跑 preflight
+
+并明确提醒：改 Variables 不影响正在运行的 job；`${{ vars.CUSTOM_CONFIG }}` 在 job 启动时就已解析。
+
+配置详解一节必须与 `config/base.yaml` 的注释保持一致——`tests/test_setup_doc.py` 已有守卫比对工作流导出的环境变量与文档中的 `${oc.env:...}`，本次扩充到新增配置键。
 
 ## 15. 变更文件清单
 
@@ -628,7 +769,8 @@ fields:
 | `weekly.py` | 插入分诊与闸门阶段，位于配额之前 |
 | `backfill.py` | 补位候选走同一道闸 |
 | `retriever/{openalex,pubmed,europepmc,crossref}_retriever.py` | 填充 `institutions` |
-| `config/base.yaml` | 新增 `report.min_score/triage_pool/triage_batch/journals/industry`；重写 `fields` |
+| `preflight.py` | 新增 `check_report_config`，并入 `run_preflight` |
+| `config/base.yaml` | 新增 `report.min_relevance/min_score/triage_pool/triage_batch/journals/industry`；重写 `fields` |
 | `docs/cmc-weekly-setup.md` | 更新 `CUSTOM_CONFIG` 样例 |
 | `README.md` | 按第 14 节重写 |
 
