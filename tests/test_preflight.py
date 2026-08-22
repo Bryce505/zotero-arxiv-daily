@@ -9,11 +9,13 @@ minutes. Preflight probes every boundary cheaply and reports a verdict.
 from datetime import datetime
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
 from zotero_arxiv_daily.preflight import (
     CheckResult,
+    check_embedding,
     check_llm,
     check_recipients,
     check_smtp,
@@ -363,3 +365,76 @@ def test_the_probe_uses_the_same_query_form_each_source_gets_in_production(monke
     assert probed["openalex"] == probed["europepmc"]
     assert probed["pubmed"] != probed["crossref"], "PubMed takes its boolean form"
     assert " OR " not in probed["crossref"], "Crossref takes the natural-language form"
+
+
+class TestCheckEmbedding:
+    """The embedding backend is the one boundary preflight never touched.
+
+    A wrong EMBEDDING_API_KEY composes fine — interpolation succeeds — and only
+    surfaces at the rerank step, about ten minutes into the weekly run, after
+    clustering and query distillation have already spent LLM calls.
+    """
+
+    @staticmethod
+    def _config(reranker: str = "api"):
+        return make_config(**{"executor.reranker": reranker})
+
+    def _patch(self, monkeypatch, embed):
+        class StubReranker:
+            def __init__(self, config):
+                pass
+
+        StubReranker.embed = staticmethod(embed)
+        monkeypatch.setattr(
+            "zotero_arxiv_daily.preflight.get_reranker_cls", lambda name: StubReranker
+        )
+
+    def test_an_api_reranker_returning_a_vector_passes(self, monkeypatch):
+        self._patch(monkeypatch, lambda texts: np.ones((len(texts), 1024)))
+        result = check_embedding(self._config())
+        assert result.ok and not result.warning
+        assert "1024" in result.detail, "the operator should see the vector width"
+
+    def test_an_api_reranker_that_raises_fails(self, monkeypatch):
+        def boom(texts):
+            raise RuntimeError("401 Unauthorized")
+
+        self._patch(monkeypatch, boom)
+        result = check_embedding(self._config())
+        assert not result.ok
+        assert "401 Unauthorized" in result.detail
+
+    def test_an_api_reranker_returning_nothing_fails(self, monkeypatch):
+        self._patch(monkeypatch, lambda texts: np.empty((0, 0)))
+        result = check_embedding(self._config())
+        assert not result.ok
+
+    def test_the_local_reranker_is_not_probed(self, monkeypatch):
+        """Loading the local model took 5.5 minutes on the runner.
+
+        Preflight's whole value is being cheap, and a local model has no
+        credential that could be wrong, so there is nothing worth paying for.
+        """
+        calls = []
+        self._patch(monkeypatch, lambda texts: calls.append(texts) or np.ones((1, 8)))
+        result = check_embedding(self._config("local"))
+        assert result.ok
+        assert calls == [], "the local model must not be downloaded by preflight"
+
+    def test_run_preflight_includes_the_embedding_check(self, monkeypatch):
+        self._patch(monkeypatch, lambda texts: np.ones((len(texts), 1024)))
+        monkeypatch.setattr(
+            "zotero_arxiv_daily.preflight.check_zotero",
+            lambda c: CheckResult(name="zotero", ok=True, detail=""),
+        )
+        monkeypatch.setattr(
+            "zotero_arxiv_daily.preflight.check_llm",
+            lambda c: CheckResult(name="llm", ok=True, detail=""),
+        )
+        monkeypatch.setattr("zotero_arxiv_daily.preflight.check_sources", lambda c: [])
+        monkeypatch.setattr(
+            "zotero_arxiv_daily.preflight.check_smtp",
+            lambda c: CheckResult(name="smtp", ok=True, detail=""),
+        )
+        _, results = run_preflight(self._config())
+        assert "embedding" in [r.name for r in results]

@@ -17,12 +17,14 @@ from datetime import date, timedelta
 
 import dotenv
 import hydra
+import numpy as np
 from loguru import logger
 from omegaconf import DictConfig
 from openai import OpenAI
 
 from zotero_arxiv_daily.executor import Executor
-from zotero_arxiv_daily.mailer import SMTP_TIMEOUT_SECONDS, resolve_recipients
+from zotero_arxiv_daily.mailer import SMTP_TIMEOUT_SECONDS, _safe_get, resolve_recipients
+from zotero_arxiv_daily.reranker import get_reranker_cls
 from zotero_arxiv_daily.retriever import get_query_retriever_cls
 from zotero_arxiv_daily.search.profile import QueryProfile, query_for_source
 
@@ -109,6 +111,48 @@ def check_llm(config: DictConfig) -> CheckResult:
     return CheckResult(name="llm", ok=True, detail=f"{model} answered ({language or 'default'})")
 
 
+# Short, domain-shaped, and cheap: one vector proves the credential, the base
+# URL and the model name all resolve.
+_EMBEDDING_PROBE = "capillary isoelectric focusing of monoclonal antibody charge variants"
+
+
+def check_embedding(config: DictConfig) -> CheckResult:
+    """Probe the embedding backend — the one boundary nothing else here touches.
+
+    A wrong key composes fine and only fails at the rerank step, ten minutes
+    into the weekly run, after clustering and distillation have already spent
+    LLM calls.
+
+    Only the API reranker is probed. It is the one holding a credential that
+    can be wrong, and it answers in about a second; the local model has no
+    credential, and downloading it cost 5.5 minutes on the runner, which would
+    defeat the point of a preflight that finishes in under a minute.
+    """
+    executor = _safe_get(config, "executor") or {}
+    name = str(_safe_get(executor, "reranker") or "")
+    if name != "api":
+        return CheckResult(
+            name="embedding",
+            ok=True,
+            detail=f"{name or 'default'} reranker; no credential to probe",
+        )
+    try:
+        vectors = get_reranker_cls(name)(config).embed([_EMBEDDING_PROBE])
+    except Exception as exc:  # noqa: BLE001 - the point is to report, not raise
+        return CheckResult(name="embedding", ok=False, detail=f"embedding call failed: {exc}")
+
+    array = np.asarray(vectors)
+    if array.size == 0:
+        return CheckResult(
+            name="embedding", ok=False, detail="the embedding API returned no vector"
+        )
+    api = _safe_get(config, "reranker") or {}
+    model = _safe_get(_safe_get(api, "api") or {}, "model") or "the embedding model"
+    return CheckResult(
+        name="embedding", ok=True, detail=f"{model} returned a {array.shape[-1]}-dim vector"
+    )
+
+
 def check_sources(config: DictConfig) -> list[CheckResult]:
     end = date.today()
     start = end - timedelta(days=30)
@@ -171,7 +215,7 @@ def run_preflight(config: DictConfig) -> tuple[bool, list[CheckResult]]:
     """Run every check. Returns ``(everything_passed, results)``."""
     results = [check_zotero(config), check_llm(config)]
     results.extend(check_sources(config))
-    results.extend([check_recipients(config), check_smtp(config)])
+    results.extend([check_embedding(config), check_recipients(config), check_smtp(config)])
     return all(r.ok for r in results), results
 
 
