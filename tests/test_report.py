@@ -118,6 +118,86 @@ def test_web_html_escapes_markup_in_paper_content():
     assert "&lt;script&gt;" in html
 
 
+# --------------------------------------------------------------------------- sidebar TOC + numbering
+
+def test_web_html_has_a_sidebar_nav():
+    html = render_web_html(sample_digest(), FIELDS)
+    assert '<nav class="toc">' in html
+
+
+def test_web_html_sidebar_lists_every_section():
+    html = render_web_html(sample_digest(), FIELDS)
+    nav = html[html.index('<nav class="toc">'): html.index("</nav>")]
+    for section in ("本周优先读", "电荷异质性", "宿主细胞蛋白", "经典补位"):
+        assert section in nav
+
+
+def test_web_html_numbers_papers_in_reading_order():
+    """alpha/beta are the top picks (score 9.0/8.0), gamma is cluster-only,
+    classic is backfill: reading order is alpha, beta, gamma, classic."""
+    html = render_web_html(sample_digest(), FIELDS)
+    # The badge marker, not a bare digit: the page's own CSS hex colours
+    # (#14181A, #2A3033, ...) contain "#1"/"#2" and sit before the body,
+    # so a bare html.index("#1") < html.index("alpha") passes regardless
+    # of whether numbering is correct at all.
+    badge = lambda n: f'<span class="num">#{n}</span>'
+    assert html.index(badge(1)) < html.index("alpha")
+    assert html.index(badge(2)) < html.index("beta")
+    assert html.index(badge(3)) < html.index("gamma")
+    assert html.index(badge(4)) < html.index("classic")
+
+
+def test_web_html_reuses_the_same_number_for_a_top_pick_and_its_cluster_card():
+    """alpha is both a top pick and a member of its cluster.  Every mention
+    must carry the same #1, never a second number minted for the same
+    paper: the sidebar lists it twice (once under 本周优先读, once under
+    its own cluster section, each section mirroring its body counterpart
+    in full), plus once in the top-picks list and once on its card."""
+    html = render_web_html(sample_digest(), FIELDS)
+    # A plain substring count of "#1" is not safe here: the page's own CSS
+    # contains hex colours like #14181A and #1F2421 that also match it.
+    assert html.count('<span class="num">#1</span>') == 4
+
+
+def test_web_html_sidebar_links_jump_to_the_matching_card_anchor():
+    html = render_web_html(sample_digest(), FIELDS)
+    # gamma is #3 per the reading-order test above.
+    assert 'href="#p-3"' in html
+    assert 'id="p-3"' in html
+
+
+def test_web_html_needs_manual_list_reuses_the_papers_existing_number():
+    """gamma is oa_status=closed, so it also appears under 需人工取全文.
+    That mention must show gamma's real number (#3), not a fresh one."""
+    html = render_web_html(sample_digest(), FIELDS)
+    manual_section = html[html.index("需人工取全文"):]
+    assert '<span class="num">#3</span>' in manual_section
+
+
+def test_web_html_sidebar_entry_titles_are_escaped():
+    papers = [make_paper("x<script>alert(1)</script>", "c", 1.0)]
+    html = render_web_html(build_digest(papers, [], date(2026, 8, 21), top_n=1), FIELDS)
+    nav = html[html.index('<nav class="toc">'): html.index("</nav>")]
+    assert "<script>alert(1)</script>" not in nav
+    assert "&lt;script&gt;" in nav
+
+
+def test_web_html_sidebar_truncates_a_long_title():
+    long_title = "A" * 200
+    papers = [make_paper(long_title, "c", 1.0)]
+    html = render_web_html(build_digest(papers, [], date(2026, 8, 21), top_n=1), FIELDS)
+    nav = html[html.index('<nav class="toc">'): html.index("</nav>")]
+    assert "A" * 200 not in nav
+    assert "…" in nav
+
+
+def test_web_html_renders_without_a_sidebar_when_the_digest_is_empty():
+    digest = build_digest([], [], date(2026, 8, 21), top_n=3)
+    html = render_web_html(digest, FIELDS)
+    assert "2026-08-W3" in html
+    assert '<nav class="toc">' not in html
+
+
 def test_email_html_uses_table_layout_only():
     html = render_email_html(sample_digest(), FIELDS)
     assert "<table" in html

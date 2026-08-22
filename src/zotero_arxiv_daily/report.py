@@ -190,16 +190,92 @@ h3{font-size:1.05rem;margin:1.6rem 0 .3rem}
 a{color:var(--accent)}
 .pill{display:inline-block;margin-left:.5rem;font-size:.75rem;padding:.1rem .5rem;border:1px solid var(--rule);border-radius:999px;color:var(--muted)}
 .points{margin:.35rem 0 0;padding-left:1.4rem}.points li{margin:.25rem 0}
+.layout{display:grid;grid-template-columns:15rem 1fr;max-width:74rem;margin:0 auto;align-items:start}
+main{padding:2rem 1.5rem}
+nav.toc{position:sticky;top:0;height:100vh;overflow-y:auto;padding:2rem 1rem 2rem 1.5rem;
+ border-right:1px solid var(--rule);font-size:.82rem}
+.toc-title{font-weight:700;font-size:.95rem;margin-bottom:.9rem;color:var(--fg)}
+.toc-section{color:var(--muted);font-weight:600;margin:1.1rem 0 .3rem;font-size:.75rem;letter-spacing:.02em}
+nav.toc ul{list-style:none;margin:0;padding:0}
+nav.toc li{margin:.15rem 0}
+nav.toc a{display:flex;gap:.4rem;color:var(--fg);text-decoration:none;padding:.25rem .4rem;
+ border-radius:6px;line-height:1.35}
+nav.toc a:hover{background:var(--card);color:var(--accent)}
+.num{color:var(--accent);font-weight:700;flex-shrink:0}
+h3 .num,li .num{margin-right:.35rem}
+@media (max-width:860px){
+ .layout{display:block}
+ nav.toc{position:static;height:auto;border-right:none;border-bottom:1px solid var(--rule);padding:1.2rem 1rem}
+ main{padding:1.5rem 1rem}
+}
 """.strip()
 
+_TOC_TITLE_MAX_LEN = 34
 
-def _html_card(paper: Paper, fields: list[FieldSpec], extra: str = "") -> str:
+
+def _number_papers(digest: Digest) -> dict[int, int]:
+    """Assign each unique paper a running number in reading order.
+
+    Reading order is top picks first (the order a person meets them), then
+    each cluster top to bottom, then backfill.  A top pick is the same
+    ``Paper`` object as its cluster-card counterpart, so keying on ``id()``
+    and skipping anything already seen makes both mentions carry one number
+    rather than two.
+    """
+    numbers: dict[int, int] = {}
+    n = 1
+    for paper in list(digest.top_picks) + [p for _, papers in digest.clusters for p in papers] + list(
+        digest.backfill
+    ):
+        if id(paper) not in numbers:
+            numbers[id(paper)] = n
+            n += 1
+    return numbers
+
+
+def _num_badge(paper: Paper, numbers: dict[int, int]) -> str:
+    n = numbers.get(id(paper))
+    return f'<span class="num">#{n}</span> ' if n else ""
+
+
+def _toc_html(digest: Digest, numbers: dict[int, int]) -> str:
+    """A sticky sidebar of every section, each entry jumping to its card."""
+    sections: list[tuple[str, list[Paper]]] = []
+    if digest.top_picks:
+        sections.append(("本周优先读", list(digest.top_picks)))
+    sections.extend(digest.clusters)
+    if digest.backfill:
+        sections.append(("经典补位", list(digest.backfill)))
+    if not any(papers for _, papers in sections):
+        return ""
+
+    parts = ['<nav class="toc"><div class="toc-title">目录</div>']
+    for name, papers in sections:
+        if not papers:
+            continue
+        parts.append(f'<div class="toc-section">{escape(name)}</div><ul>')
+        for paper in papers:
+            n = numbers.get(id(paper))
+            if n is None:
+                continue
+            title = paper.title
+            short = title if len(title) <= _TOC_TITLE_MAX_LEN else title[:_TOC_TITLE_MAX_LEN] + "…"
+            parts.append(f'<li><a href="#p-{n}"><span class="num">#{n}</span>{escape(short)}</a></li>')
+        parts.append("</ul>")
+    parts.append("</nav>")
+    return "".join(parts)
+
+
+def _html_card(paper: Paper, fields: list[FieldSpec], numbers: dict[int, int], extra: str = "") -> str:
     link = escape(paper.doi_url or paper.url)
     meta = _byline(paper)
     if extra:
         meta = f"{meta} · {extra}" if meta else extra
+    n = numbers.get(id(paper))
+    anchor = f' id="p-{n}"' if n else ""
+    badge = _num_badge(paper, numbers)
     rows = [
-        f'<div class="card"><h3><a href="{link}">{escape(paper.title)}</a></h3>',
+        f'<div class="card"{anchor}><h3>{badge}<a href="{link}">{escape(paper.title)}</a></h3>',
         f'<p class="meta">{escape(meta)}</p>',
     ]
     badges = _badges(paper)
@@ -228,12 +304,15 @@ def _html_card(paper: Paper, fields: list[FieldSpec], extra: str = "") -> str:
 
 
 def render_web_html(digest: Digest, fields: list[FieldSpec]) -> str:
+    numbers = _number_papers(digest)
     parts = [
         "<!DOCTYPE html>",
         '<html lang="zh-CN"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width,initial-scale=1">',
         f"<title>CMC 文献周报 {escape(digest.label)}</title>",
-        f"<style>{_WEB_CSS}</style></head><body><main>",
+        f"<style>{_WEB_CSS}</style></head><body><div class=\"layout\">",
+        _toc_html(digest, numbers),
+        "<main>",
         f"<h1>CMC 文献周报 {escape(digest.label)}</h1>",
         f'<p class="meta">覆盖期 {digest.start.isoformat()} ~ {digest.end.isoformat()}　共 {digest.total} 篇</p>',
     ]
@@ -242,29 +321,33 @@ def render_web_html(digest: Digest, fields: list[FieldSpec]) -> str:
         parts.append("<h2>本周优先读</h2><ol>")
         for paper in digest.top_picks:
             link = escape(paper.doi_url or paper.url)
+            badge = _num_badge(paper, numbers)
             parts.append(
-                f'<li><a href="{link}">{escape(paper.title)}</a> '
+                f'<li>{badge}<a href="{link}">{escape(paper.title)}</a> '
                 f'<span class="meta">{escape(_byline(paper))}</span></li>'
             )
         parts.append("</ol>")
 
     for name, papers in digest.clusters:
         parts.append(f'<h2>{escape(name)}<span class="pill">{len(papers)} 篇</span></h2>')
-        parts.extend(_html_card(p, fields) for p in papers)
+        parts.extend(_html_card(p, fields, numbers) for p in papers)
 
     if digest.backfill:
         parts.append(
             '<h2>经典补位</h2><p class="meta">本周新文献不足，以下为依据文献库检索到的高引经典文献。</p>'
         )
-        parts.extend(_html_card(p, fields, extra=f"被引 {p.cited_by_count or 0}") for p in digest.backfill)
+        parts.extend(
+            _html_card(p, fields, numbers, extra=f"被引 {p.cited_by_count or 0}") for p in digest.backfill
+        )
 
     if digest.needs_manual:
         parts.append("<h2>需人工取全文</h2><ul>")
         for paper in digest.needs_manual:
-            parts.append(f'<li><a href="{escape(paper.doi_url or paper.url)}">{escape(paper.title)}</a></li>')
+            badge = _num_badge(paper, numbers)
+            parts.append(f'<li>{badge}<a href="{escape(paper.doi_url or paper.url)}">{escape(paper.title)}</a></li>')
         parts.append("</ul>")
 
-    parts.append("</main></body></html>")
+    parts.append("</main></div></body></html>")
     return "\n".join(parts)
 
 
