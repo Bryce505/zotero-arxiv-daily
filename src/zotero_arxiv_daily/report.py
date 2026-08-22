@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from html import escape
 
-from .extract import FieldSpec
+from .extract import FieldSpec, ListItem
 from .protocol import Paper
 from .weeknum import week_label, week_window
 
@@ -71,18 +71,59 @@ def _byline(paper: Paper) -> str:
     return " · ".join(bits)
 
 
+def _badges(paper: Paper) -> str:
+    """Relevance plus the two reasons this paper outranked its neighbours."""
+    scoring = paper.scoring
+    if scoring is None:
+        return ""
+    bits = [f"相关度 {scoring.relevance}"]
+    if scoring.journal_hit:
+        bits.append("核心期刊")
+    if scoring.industry_hit:
+        bits.append(f"企业研究（{scoring.industry_hit}）")
+    return " · ".join(bits)
+
+
+def _reason(paper: Paper) -> str:
+    return (paper.triage.reason if paper.triage else "") or ""
+
+
+def _as_items(value) -> list[ListItem]:
+    """Tolerate an extraction written before fields had types."""
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, ListItem)]
+    return []
+
+
 # --------------------------------------------------------------------------- markdown
+
+def _markdown_field(spec: FieldSpec, value) -> list[str]:
+    if spec.kind == "list":
+        items = _as_items(value)
+        if not items:
+            return []
+        lines = [f"**{spec.label}：**", ""]
+        for n, item in enumerate(items, 1):
+            lines.append(f"{n}. **{item.point}** — {item.detail}" if item.point else f"{n}. {item.detail}")
+        return lines + [""]
+    return [f"**{spec.label}：** {value}", ""] if value else []
+
 
 def _markdown_entry(paper: Paper, fields: list[FieldSpec], extra: str = "") -> list[str]:
     link = paper.doi_url or paper.url
     meta = _byline(paper)
     if extra:
         meta = f"{meta} · {extra}" if meta else extra
-    lines = [f"### {paper.title}", "", meta, "", f"DOI: <{link}>", ""]
+    lines = [f"### {paper.title}", "", meta, ""]
+    badges = _badges(paper)
+    if badges:
+        lines += [badges, ""]
+    lines += [f"DOI: <{link}>", ""]
+    reason = _reason(paper)
+    if reason:
+        lines += [f"**推荐理由：** {reason}", ""]
     for spec in fields:
-        value = (paper.extraction or {}).get(spec.key, "")
-        if value:
-            lines += [f"**{spec.label}：** {value}", ""]
+        lines += _markdown_field(spec, (paper.extraction or {}).get(spec.key, ""))
     return lines
 
 
@@ -138,6 +179,7 @@ h3{font-size:1.05rem;margin:1.6rem 0 .3rem}
 .field b{color:var(--accent)}
 a{color:var(--accent)}
 .pill{display:inline-block;margin-left:.5rem;font-size:.75rem;padding:.1rem .5rem;border:1px solid var(--rule);border-radius:999px;color:var(--muted)}
+.points{margin:.35rem 0 0;padding-left:1.4rem}.points li{margin:.25rem 0}
 """.strip()
 
 
@@ -150,9 +192,26 @@ def _html_card(paper: Paper, fields: list[FieldSpec], extra: str = "") -> str:
         f'<div class="card"><h3><a href="{link}">{escape(paper.title)}</a></h3>',
         f'<p class="meta">{escape(meta)}</p>',
     ]
+    badges = _badges(paper)
+    if badges:
+        rows.append(f'<p class="meta">{escape(badges)}</p>')
+    reason = _reason(paper)
+    if reason:
+        rows.append(f'<div class="field"><b>推荐理由</b>：{escape(reason)}</div>')
     for spec in fields:
         value = (paper.extraction or {}).get(spec.key, "")
-        if value:
+        if spec.kind == "list":
+            items = _as_items(value)
+            if not items:
+                continue
+            points = "".join(
+                f"<li><strong>{escape(i.point)}</strong> — {escape(i.detail)}</li>"
+                if i.point
+                else f"<li>{escape(i.detail)}</li>"
+                for i in items
+            )
+            rows.append(f'<div class="field"><b>{escape(spec.label)}</b><ol class="points">{points}</ol></div>')
+        elif value:
             rows.append(f'<div class="field"><b>{escape(spec.label)}</b>：{escape(value)}</div>')
     rows.append("</div>")
     return "".join(rows)
@@ -220,11 +279,12 @@ def _email_heading(text: str) -> str:
 
 def _email_pick(paper: Paper, fields: list[FieldSpec]) -> str:
     link = escape(paper.doi_url or paper.url)
-    extraction = paper.extraction or {}
-    first_field = next((extraction[f.key] for f in fields if extraction.get(f.key)), "")
+    # The teaser is the recommendation reason: it is one sentence by
+    # construction, and a list-valued field cannot be escaped as a string.
+    teaser = _reason(paper)
     body = (
-        f'<p style="margin:2px 0 0;font-size:13px;color:#3C4642">{escape(first_field)}</p>'
-        if first_field
+        f'<p style="margin:2px 0 0;font-size:13px;color:#3C4642">{escape(teaser)}</p>'
+        if teaser
         else ""
     )
     return (
@@ -241,11 +301,12 @@ def _email_list(papers: list[Paper]) -> str:
     rows = []
     for paper in papers:
         link = escape(paper.doi_url or paper.url)
+        badge = f" · 相关度 {paper.scoring.relevance}" if paper.scoring else ""
         rows.append(
             '<tr><td style="padding:4px 0;border-bottom:1px solid #F0EEE8">'
             f'<a href="{link}" style="color:#0E5E5A;font-size:13px;text-decoration:none">'
             f"{escape(paper.title)}</a>"
-            f'<span style="color:#5C6660;font-size:11px"> · {escape(_byline(paper))}</span>'
+            f'<span style="color:#5C6660;font-size:11px"> · {escape(_byline(paper))}{escape(badge)}</span>'
             "</td></tr>"
         )
     return (

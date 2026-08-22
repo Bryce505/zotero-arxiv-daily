@@ -5,6 +5,7 @@ from datetime import date
 from zotero_arxiv_daily.extract import FieldSpec
 from zotero_arxiv_daily.protocol import Paper
 from zotero_arxiv_daily.report import (
+    Digest,
     build_digest,
     render_email_html,
     render_markdown,
@@ -175,3 +176,134 @@ def test_email_trimming_never_keeps_a_heading_without_its_papers():
         if f"{name}（" in html:
             heading_at = html.index(f"{name}（")
             assert "<table" in html[heading_at:], f"{name} heading kept without its list"
+
+
+from zotero_arxiv_daily.extract import ListItem
+from zotero_arxiv_daily.scoring import ScoreBreakdown
+from zotero_arxiv_daily.triage import TriageResult
+
+LIST_SPECS = [
+    FieldSpec(key="background", label="背景", instruction="i"),
+    FieldSpec(key="method", label="方法", instruction="i", kind="list"),
+]
+
+
+def judged_paper(**kw) -> Paper:
+    paper = Paper(
+        source="pubmed",
+        title="ADC 表征",
+        authors=["Doe Jane"],
+        abstract="a",
+        url="https://example.org/1",
+        doi="10.1000/adc",
+        journal="Separations",
+        score=1.0,
+        cluster="色谱",
+    )
+    paper.triage = TriageResult(relevance=82, reason="首次把 iCIEF 用于 AAV 衣壳", modalities=["ADC"])
+    paper.scoring = ScoreBreakdown(relevance=82, journal_hit="Separations", industry_hit="Amgen", rank_score=100)
+    paper.extraction = {
+        "background": "抗体电荷异质性长期靠 IEX 分析",
+        "method": [ListItem(point="柱系统", detail="C8 反相柱"), ListItem(point="", detail="二极管阵列检测")],
+    }
+    for key, value in kw.items():
+        setattr(paper, key, value)
+    return paper
+
+
+def one_paper_digest(paper: Paper) -> Digest:
+    return build_digest([paper], [], date(2026, 8, 21), top_n=1)
+
+
+def test_markdown_numbers_a_list_field():
+    md = render_markdown(one_paper_digest(judged_paper()), LIST_SPECS)
+    assert "1. **柱系统** — C8 反相柱" in md
+
+
+def test_markdown_omits_the_dash_when_there_is_no_keyword():
+    md = render_markdown(one_paper_digest(judged_paper()), LIST_SPECS)
+    assert "2. 二极管阵列检测" in md
+
+
+def test_markdown_still_renders_a_text_field_inline():
+    md = render_markdown(one_paper_digest(judged_paper()), LIST_SPECS)
+    assert "**背景：** 抗体电荷异质性长期靠 IEX 分析" in md
+
+
+def test_markdown_shows_relevance_and_both_badges():
+    md = render_markdown(one_paper_digest(judged_paper()), LIST_SPECS)
+    assert "相关度 82" in md
+    assert "核心期刊" in md
+    assert "企业研究（Amgen）" in md
+
+
+def test_markdown_shows_the_recommendation_reason():
+    md = render_markdown(one_paper_digest(judged_paper()), LIST_SPECS)
+    assert "**推荐理由：** 首次把 iCIEF 用于 AAV 衣壳" in md
+
+
+def test_a_paper_without_a_journal_hit_shows_no_journal_badge():
+    paper = judged_paper()
+    paper.scoring = ScoreBreakdown(relevance=70, journal_hit=None, industry_hit=None, rank_score=70)
+    md = render_markdown(one_paper_digest(paper), LIST_SPECS)
+    assert "相关度 70" in md
+    assert "核心期刊" not in md
+    assert "企业研究" not in md
+
+
+def test_an_unjudged_paper_renders_without_a_badge_line():
+    paper = judged_paper()
+    paper.triage = None
+    paper.scoring = None
+    md = render_markdown(one_paper_digest(paper), LIST_SPECS)
+    assert "相关度" not in md
+    assert "推荐理由" not in md
+    assert "抗体电荷异质性长期靠 IEX 分析" in md
+
+
+def test_web_html_renders_a_list_field_as_an_ordered_list():
+    html = render_web_html(one_paper_digest(judged_paper()), LIST_SPECS)
+    assert "<ol" in html
+    assert "<strong>柱系统</strong>" in html
+    assert "C8 反相柱" in html
+
+
+def test_web_html_escapes_list_item_text():
+    paper = judged_paper()
+    paper.extraction = {"background": "", "method": [ListItem(point="<b>x</b>", detail="a & b")]}
+    html = render_web_html(one_paper_digest(paper), LIST_SPECS)
+    assert "&lt;b&gt;x&lt;/b&gt;" in html
+    assert "a &amp; b" in html
+
+
+def test_web_html_shows_the_badges():
+    html = render_web_html(one_paper_digest(judged_paper()), LIST_SPECS)
+    assert "相关度 82" in html
+    assert "企业研究（Amgen）" in html
+
+
+def test_email_uses_the_recommendation_reason_as_the_teaser():
+    # The old teaser took the first non-empty field and escaped it, which
+    # raises TypeError now that a field can be a list.
+    html = render_email_html(one_paper_digest(judged_paper()), LIST_SPECS)
+    assert "首次把 iCIEF 用于 AAV 衣壳" in html
+
+
+def test_email_renders_without_a_triage_verdict():
+    paper = judged_paper()
+    paper.triage = None
+    paper.scoring = None
+    html = render_email_html(one_paper_digest(paper), LIST_SPECS)
+    assert "ADC 表征" in html
+
+
+def test_email_shows_relevance_in_the_cluster_rows():
+    html = render_email_html(one_paper_digest(judged_paper()), LIST_SPECS)
+    assert "相关度 82" in html
+
+
+def test_email_still_fits_its_byte_budget():
+    papers = [judged_paper() for _ in range(200)]
+    digest = build_digest(papers, [], date(2026, 8, 21), top_n=3)
+    html = render_email_html(digest, LIST_SPECS, max_bytes=20000)
+    assert len(html.encode("utf-8")) <= 20000
