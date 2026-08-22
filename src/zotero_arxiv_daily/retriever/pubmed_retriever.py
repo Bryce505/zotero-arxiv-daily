@@ -83,6 +83,11 @@ class PubmedRetriever(BaseQueryRetriever):
                 pub_date = None
 
         pmid = article.findtext(".//PMID") or ""
+        institutions: list[str] = []
+        for node in article.findall(".//AffiliationInfo/Affiliation"):
+            name = (node.text or "").strip()
+            if name and name not in institutions:
+                institutions.append(name)
         return Paper(
             source="pubmed",
             title=title,
@@ -92,6 +97,7 @@ class PubmedRetriever(BaseQueryRetriever):
             doi=doi,
             journal=article.findtext(".//Journal/Title"),
             pub_date=pub_date,
+            institutions=institutions,
         )
 
     def search(self, query: str, start: date, end: date, limit: int) -> list[Paper]:

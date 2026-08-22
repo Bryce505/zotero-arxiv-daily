@@ -34,6 +34,7 @@ class EuropepmcRetriever(BaseQueryRetriever):
             return None
         is_open = item.get("isOpenAccess") == "Y"
         pmcid = item.get("pmcid")
+        affiliation = (item.get("affiliation") or "").strip()
         return Paper(
             source="europepmc",
             title=(item.get("title") or "").strip().rstrip("."),
@@ -45,6 +46,7 @@ class EuropepmcRetriever(BaseQueryRetriever):
             pub_date=self._parse_date(item.get("firstPublicationDate")),
             oa_status="open" if is_open else "closed",
             pdf_url=EPMC_PDF_URL.format(pmcid=pmcid) if pmcid and is_open else None,
+            institutions=[affiliation] if affiliation else [],
         )
 
     def search(self, query: str, start: date, end: date, limit: int) -> list[Paper]:

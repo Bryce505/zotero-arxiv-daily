@@ -46,6 +46,12 @@ class CrossrefRetriever(BaseQueryRetriever):
         titles = item.get("title") or []
         containers = item.get("container-title") or []
         doi = item.get("DOI")
+        institutions: list[str] = []
+        for author in item.get("author") or []:
+            for affiliation in author.get("affiliation") or []:
+                name = (affiliation.get("name") or "").strip()
+                if name and name not in institutions:
+                    institutions.append(name)
         return Paper(
             source="crossref",
             title=(titles[0] if titles else "").strip(),
@@ -59,6 +65,7 @@ class CrossrefRetriever(BaseQueryRetriever):
             doi=doi,
             journal=containers[0] if containers else None,
             pub_date=self._parse_date(item),
+            institutions=institutions,
         )
 
     def search(self, query: str, start: date, end: date, limit: int) -> list[Paper]:
@@ -72,7 +79,8 @@ class CrossrefRetriever(BaseQueryRetriever):
                 f"until-created-date:{end:%Y-%m-%d},"
                 "type:journal-article"
             ),
-            "select": "DOI,title,abstract,author,container-title,created",
+            # Crossref omits any field not named here, affiliation included.
+            "select": "DOI,title,abstract,author,container-title,created,affiliation",
         }
         mailto = self._setting("mailto")
         agent = "zotero-cmc-weekly/1.0"

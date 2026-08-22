@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, TypeVar
 from datetime import date, datetime
 import re
@@ -29,6 +29,13 @@ class Paper:
     cluster: Optional[str] = None
     is_backfill: bool = False
     cited_by_count: Optional[int] = None
+    # Affiliations as the retrieval source itself reported them.  Distinct
+    # from `affiliations`, which the LLM extracts from full text and which is
+    # empty for nearly every paper because the full text is paywalled.
+    institutions: list[str] = field(default_factory=list)
+    # The subset OpenAlex flagged `type == "company"`.  No other source
+    # reports an institution type, so for them this stays empty.
+    company_institutions: list[str] = field(default_factory=list)
 
     @property
     def doi_url(self) -> Optional[str]:

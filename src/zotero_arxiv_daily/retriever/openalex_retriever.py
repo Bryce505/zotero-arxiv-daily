@@ -43,6 +43,16 @@ class OpenalexRetriever(BaseQueryRetriever):
         doi = (work.get("doi") or "").replace("https://doi.org/", "").strip() or None
         source_block = (work.get("primary_location") or {}).get("source") or {}
         oa = work.get("open_access") or {}
+        institutions: list[str] = []
+        companies: list[str] = []
+        for authorship in work.get("authorships") or []:
+            for institution in authorship.get("institutions") or []:
+                name = (institution.get("display_name") or "").strip()
+                if not name or name in institutions:
+                    continue
+                institutions.append(name)
+                if institution.get("type") == "company":
+                    companies.append(name)
         return Paper(
             source="openalex",
             title=(work.get("title") or "").strip(),
@@ -60,6 +70,8 @@ class OpenalexRetriever(BaseQueryRetriever):
             oa_status="open" if oa.get("is_oa") else "closed",
             pdf_url=oa.get("oa_url"),
             is_backfill=is_backfill,
+            institutions=institutions,
+            company_institutions=companies,
         )
 
     def _query(self, params: dict, *, is_backfill: bool) -> list[Paper]:
