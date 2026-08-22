@@ -263,8 +263,14 @@ def match_name(text: str, names: list[str]) -> str | None:
 ### 6.3 企业判定的两条触发路径
 
 ```python
-def is_industry(paper: Paper, names: list[str]) -> str | None:
+def match_industry(
+    institutions: list[str],
+    company_institutions: list[str],
+    names: list[str],
+) -> str | None:
 ```
+
+接收两个列表而非整个 `Paper`，使本模块不反向依赖 `protocol`。
 
 1. `paper.institutions` 中任一项命中企业名单 → 返回命中的公司名
 2. OpenAlex 明确标注 `institutions[].type == "company"` → 返回该机构 `display_name`
