@@ -1,11 +1,15 @@
 from dataclasses import dataclass, field
-from typing import Optional, TypeVar
+from typing import Optional, TypeVar, TYPE_CHECKING
 from datetime import date, datetime
 import re
 import tiktoken
 from openai import OpenAI
 from loguru import logger
 import json
+
+if TYPE_CHECKING:
+    from .triage import TriageResult
+
 RawPaperItem = TypeVar('RawPaperItem')
 
 @dataclass
@@ -36,6 +40,7 @@ class Paper:
     # The subset OpenAlex flagged `type == "company"`.  No other source
     # reports an institution type, so for them this stays empty.
     company_institutions: list[str] = field(default_factory=list)
+    triage: Optional["TriageResult"] = None
 
     @property
     def doi_url(self) -> Optional[str]:
