@@ -133,7 +133,33 @@ class WeeklyExecutor(Executor):
         # Cluster membership indexes the corpus as fetched, so undo the sort.
         sim_original = np.empty_like(sim_sorted)
         sim_original[:, order] = sim_sorted
-        assign_clusters(candidates, sim_original, clusters)
+        assign_clusters(
+            candidates,
+            sim_original,
+            clusters,
+            desc_sim=self._description_similarity(candidates, clusters),
+            description_weight=float(
+                self.config.search.get("cluster_assignment_description_weight", 0.6)
+            ),
+        )
+
+    def _description_similarity(self, candidates, clusters):
+        """Candidate-to-cluster-description similarity, or None if it can't be had.
+
+        A cluster's one-sentence description is a sharper, deliberately
+        topical signal than the mean similarity to its corpus members, which
+        is exactly what corrects a candidate that only shares surface
+        vocabulary with a theme's papers.  It is a genuine enhancement,
+        though, not a requirement: a failure here must fall back to the
+        existing corpus-only routing, not cost the digest.
+        """
+        try:
+            return self.reranker.get_similarity_score(
+                [p.abstract for p in candidates], [c.description for c in clusters]
+            )
+        except Exception as exc:  # noqa: BLE001 - an enhancement must never cost the digest
+            logger.warning(f"Cluster-description similarity unusable ({exc}); routing by corpus mean only")
+            return None
 
     def _gate(self, papers):
         """Triage, score, and keep only what clears both thresholds."""

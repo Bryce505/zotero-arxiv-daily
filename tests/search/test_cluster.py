@@ -157,6 +157,82 @@ def test_assignment_skips_empty_clusters():
     assert candidates[0].cluster == "real"
 
 
+# --------------------------------------------------------------------------- description-weighted assignment
+
+def test_without_desc_sim_the_corpus_only_behaviour_is_unchanged():
+    """desc_sim defaults to None: identical to calling the old 3-arg form."""
+    candidates = [
+        Paper(source="s", title="c0", authors=[], abstract="a", url="u0"),
+        Paper(source="s", title="c1", authors=[], abstract="a", url="u1"),
+    ]
+    clusters = [
+        ThemeCluster(name="alpha", description="", members=[0, 1]),
+        ThemeCluster(name="beta", description="", members=[2, 3]),
+    ]
+    sim = np.array([[0.9, 0.8, 0.1, 0.2], [0.1, 0.2, 0.9, 0.7]])
+    assign_clusters(candidates, sim, clusters, desc_sim=None)
+    assert candidates[0].cluster == "alpha"
+    assert candidates[1].cluster == "beta"
+
+
+def test_description_similarity_can_override_a_weak_corpus_signal():
+    """A candidate that only surface-overlaps a cluster's papers, without
+    actually matching what the cluster's description says it is about, is
+    exactly the case description similarity exists to correct."""
+    candidates = [Paper(source="s", title="c", authors=[], abstract="a", url="u")]
+    clusters = [
+        ThemeCluster(name="hcp", description="宿主细胞蛋白残留检测", members=[0]),
+        ThemeCluster(name="vaccine", description="疫苗效力测定", members=[1]),
+    ]
+    # Corpus-mean similarity narrowly favours hcp...
+    sim = np.array([[0.55, 0.50]])
+    # ...but the candidate's abstract is much closer to vaccine's description.
+    desc_sim = np.array([[0.1, 0.9]])
+    assign_clusters(candidates, sim, clusters, desc_sim=desc_sim)
+    assert candidates[0].cluster == "vaccine"
+
+
+def test_description_weight_of_zero_ignores_the_description_signal():
+    candidates = [Paper(source="s", title="c", authors=[], abstract="a", url="u")]
+    clusters = [
+        ThemeCluster(name="hcp", description="d1", members=[0]),
+        ThemeCluster(name="vaccine", description="d2", members=[1]),
+    ]
+    sim = np.array([[0.55, 0.50]])
+    desc_sim = np.array([[0.1, 0.9]])  # would flip the pick at the default weight
+    assign_clusters(candidates, sim, clusters, desc_sim=desc_sim, description_weight=0.0)
+    assert candidates[0].cluster == "hcp"
+
+
+def test_description_weight_of_one_ignores_the_corpus_signal():
+    candidates = [Paper(source="s", title="c", authors=[], abstract="a", url="u")]
+    clusters = [
+        ThemeCluster(name="hcp", description="d1", members=[0]),
+        ThemeCluster(name="vaccine", description="d2", members=[1]),
+    ]
+    sim = np.array([[0.99, 0.01]])  # would win at weight 0 but is fully ignored here
+    desc_sim = np.array([[0.1, 0.9]])
+    assign_clusters(candidates, sim, clusters, desc_sim=desc_sim, description_weight=1.0)
+    assert candidates[0].cluster == "vaccine"
+
+
+def test_description_similarity_columns_track_the_full_cluster_list_not_just_populated_ones():
+    """desc_sim is built against the caller's full *clusters* list, including
+    any empty ones — a column-alignment bug here would silently score every
+    candidate against the wrong cluster's description."""
+    candidates = [Paper(source="s", title="c", authors=[], abstract="a", url="u")]
+    clusters = [
+        ThemeCluster(name="empty", description="", members=[]),
+        ThemeCluster(name="alpha", description="", members=[0]),
+        ThemeCluster(name="beta", description="", members=[1]),
+    ]
+    sim = np.array([[0.5, 0.5]])  # alpha/beta corpus-mean tie
+    # Columns are [empty, alpha, beta]; beta's description strongly wins.
+    desc_sim = np.array([[0.0, 0.1, 0.9]])
+    assign_clusters(candidates, sim, clusters, desc_sim=desc_sim)
+    assert candidates[0].cluster == "beta"
+
+
 def test_cached_membership_follows_the_papers_not_their_positions(tmp_path):
     """Zotero returns items newest-modified first, so positions move.
 

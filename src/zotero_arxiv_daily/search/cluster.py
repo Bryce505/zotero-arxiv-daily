@@ -229,15 +229,43 @@ def load_or_build_clusters(
     return clusters
 
 
-def assign_clusters(candidates: list[Paper], sim: np.ndarray, clusters: list[ThemeCluster]) -> None:
-    """Route each candidate to the cluster its corpus members sit closest to.
+_DEFAULT_DESCRIPTION_WEIGHT = 0.6
 
-    Uses the *mean* similarity over a cluster's members rather than the max,
-    so a single accidental spike cannot outweigh a consistently close theme.
+
+def assign_clusters(
+    candidates: list[Paper],
+    sim: np.ndarray,
+    clusters: list[ThemeCluster],
+    desc_sim: np.ndarray | None = None,
+    description_weight: float = _DEFAULT_DESCRIPTION_WEIGHT,
+) -> None:
+    """Route each candidate to the theme its combined signal points at.
+
+    Two signals, blended.  The *mean* similarity over a cluster's corpus
+    members is the original signal — using the mean rather than the max so a
+    single accidental spike cannot outweigh a consistently close theme — but
+    it is diffuse: it averages over every paper the theme happens to
+    contain, so a candidate that merely shares surface vocabulary with those
+    papers can outscore one that actually matches the theme.  ``desc_sim``,
+    the candidate's similarity to each cluster's own one-sentence
+    description, is a sharper, deliberately topical signal that corrects
+    exactly that case.  It is optional — a caller that cannot produce it
+    passes ``None`` and gets the original corpus-only routing.
+
+    ``desc_sim`` must have one column per entry of *clusters* in that same
+    order, including any empty ones — its columns are not pre-filtered to
+    match ``populated`` below.
     """
-    populated = [c for c in clusters if c.members]
+    populated = [(i, c) for i, c in enumerate(clusters) if c.members]
     if not populated:
         return
-    for row, paper in zip(sim, candidates):
-        means = [float(np.mean(row[c.members])) for c in populated]
-        paper.cluster = populated[int(np.argmax(means))].name
+    for row_i, (row, paper) in enumerate(zip(sim, candidates)):
+        corpus_scores = [float(np.mean(row[c.members])) for _, c in populated]
+        if desc_sim is None:
+            combined = corpus_scores
+        else:
+            combined = [
+                (1 - description_weight) * corpus_scores[j] + description_weight * float(desc_sim[row_i, idx])
+                for j, (idx, _) in enumerate(populated)
+            ]
+        paper.cluster = populated[int(np.argmax(combined))][1].name

@@ -153,6 +153,12 @@ def stubbed(monkeypatch, weekly_config):
             values = np.linspace(0.1, 0.9, len(candidates) * len(corpus))
             return values.reshape(len(candidates), len(corpus))
 
+        def get_similarity_score(self, s1, s2):
+            # Uniform: leaves cluster assignment exactly as the corpus-mean
+            # signal alone would produce it, so existing full-pipeline tests
+            # that assert a specific cluster keep asserting real behaviour.
+            return np.full((len(s1), len(s2)), 0.5)
+
     monkeypatch.setattr("zotero_arxiv_daily.weekly.get_reranker_cls", lambda name: StubReranker)
     monkeypatch.setattr(
         "zotero_arxiv_daily.weekly.send_digest",
@@ -224,6 +230,166 @@ def test_every_candidate_is_assigned_a_cluster(weekly_config, stubbed):
     for _, papers in digest.clusters:
         for paper in papers:
             assert paper.cluster in {"电荷", "HCP"}
+
+
+# --------------------------------------------------------------------------- description-weighted assignment
+
+def _minimal_executor(config, reranker):
+    """A WeeklyExecutor with only what `_score_and_assign` touches set up."""
+    executor = WeeklyExecutor.__new__(WeeklyExecutor)
+    executor.config = config
+    executor.reranker = reranker
+    return executor
+
+
+def _minimal_weekly_config(**search_overrides):
+    config = OmegaConf.create(
+        {
+            "reranker": {"vector_cache": None},
+            "executor": {"reranker": "api"},
+            "search": {"n_clusters": 2, **search_overrides},
+        }
+    )
+    return config
+
+
+# These focus on plumbing — does `_score_and_assign` call the reranker with
+# the right texts, and pass the right desc_sim/weight to assign_clusters —
+# not on re-deriving assign_clusters' own arithmetic, which is already
+# covered directly in tests/search/test_cluster.py.  Re-deriving it here
+# means reasoning through _score_and_assign's corpus-by-recency reordering
+# (`order`/`sim_original`), which is exactly the kind of index arithmetic
+# that is easy to get wrong in the test itself; spying on the call sidesteps
+# it entirely.
+
+
+def _spy_on_assign_clusters(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.weekly.assign_clusters",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    return calls
+
+
+def test_score_and_assign_asks_the_reranker_for_description_similarity(monkeypatch):
+    calls = []
+
+    class Reranker:
+        def similarity_matrix(self, candidates, corpus):
+            return np.zeros((len(candidates), len(corpus)))
+
+        def get_similarity_score(self, s1, s2):
+            calls.append((s1, s2))
+            return np.array([[0.1, 0.9]])
+
+    from zotero_arxiv_daily.search.cluster import ThemeCluster
+
+    candidates = [Paper(source="s", title="c", authors=[], abstract="candidate abstract", url="u")]
+    corpus = [CorpusPaper(title="t", abstract="a", added_date=datetime(2026, 1, 1), paths=[])]
+    clusters = [
+        ThemeCluster(name="alpha", description="d-alpha", members=[0]),
+        ThemeCluster(name="beta", description="d-beta", members=[]),
+    ]
+    executor = _minimal_executor(_minimal_weekly_config(), Reranker())
+    executor._score_and_assign(candidates, corpus, clusters)
+
+    assert len(calls) == 1
+    s1, s2 = calls[0]
+    assert s1 == ["candidate abstract"]
+    assert s2 == ["d-alpha", "d-beta"]
+
+
+def test_score_and_assign_passes_the_description_similarity_through(monkeypatch):
+    class Reranker:
+        def similarity_matrix(self, candidates, corpus):
+            return np.zeros((len(candidates), len(corpus)))
+
+        def get_similarity_score(self, s1, s2):
+            return np.array([[0.05, 0.95]])
+
+    from zotero_arxiv_daily.search.cluster import ThemeCluster
+
+    calls = _spy_on_assign_clusters(monkeypatch)
+    candidates = [Paper(source="s", title="c", authors=[], abstract="a", url="u")]
+    corpus = [CorpusPaper(title="t0", abstract="a", added_date=datetime(2026, 1, 1), paths=[])]
+    clusters = [ThemeCluster(name="alpha", description="d", members=[0])]
+    executor = _minimal_executor(_minimal_weekly_config(), Reranker())
+    executor._score_and_assign(candidates, corpus, clusters)
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    np.testing.assert_array_equal(kwargs["desc_sim"], np.array([[0.05, 0.95]]))
+
+
+def test_score_and_assign_degrades_to_desc_sim_none_when_description_similarity_fails(monkeypatch):
+    """A failing enhancement must not cost the digest: assign_clusters still
+    gets called, just with desc_sim=None (its documented corpus-only mode)."""
+
+    class Reranker:
+        def similarity_matrix(self, candidates, corpus):
+            return np.zeros((len(candidates), len(corpus)))
+
+        def get_similarity_score(self, s1, s2):
+            raise RuntimeError("embedding API down")
+
+    from zotero_arxiv_daily.search.cluster import ThemeCluster
+
+    calls = _spy_on_assign_clusters(monkeypatch)
+    candidates = [Paper(source="s", title="c", authors=[], abstract="a", url="u")]
+    corpus = [CorpusPaper(title="t0", abstract="a", added_date=datetime(2026, 1, 1), paths=[])]
+    clusters = [ThemeCluster(name="alpha", description="d", members=[0])]
+    executor = _minimal_executor(_minimal_weekly_config(), Reranker())
+    executor._score_and_assign(candidates, corpus, clusters)
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["desc_sim"] is None
+
+
+def test_score_and_assign_reads_the_description_weight_from_config(monkeypatch):
+    class Reranker:
+        def similarity_matrix(self, candidates, corpus):
+            return np.zeros((len(candidates), len(corpus)))
+
+        def get_similarity_score(self, s1, s2):
+            return np.array([[0.5]])
+
+    from zotero_arxiv_daily.search.cluster import ThemeCluster
+
+    calls = _spy_on_assign_clusters(monkeypatch)
+    candidates = [Paper(source="s", title="c", authors=[], abstract="a", url="u")]
+    corpus = [CorpusPaper(title="t0", abstract="a", added_date=datetime(2026, 1, 1), paths=[])]
+    clusters = [ThemeCluster(name="alpha", description="d", members=[0])]
+    config = _minimal_weekly_config(cluster_assignment_description_weight=0.25)
+    executor = _minimal_executor(config, Reranker())
+    executor._score_and_assign(candidates, corpus, clusters)
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["description_weight"] == 0.25
+
+
+def test_score_and_assign_defaults_the_description_weight_when_unconfigured(monkeypatch):
+    class Reranker:
+        def similarity_matrix(self, candidates, corpus):
+            return np.zeros((len(candidates), len(corpus)))
+
+        def get_similarity_score(self, s1, s2):
+            return np.array([[0.5]])
+
+    from zotero_arxiv_daily.search.cluster import ThemeCluster
+
+    calls = _spy_on_assign_clusters(monkeypatch)
+    candidates = [Paper(source="s", title="c", authors=[], abstract="a", url="u")]
+    corpus = [CorpusPaper(title="t0", abstract="a", added_date=datetime(2026, 1, 1), paths=[])]
+    clusters = [ThemeCluster(name="alpha", description="d", members=[0])]
+    executor = _minimal_executor(_minimal_weekly_config(), Reranker())  # no override
+    executor._score_and_assign(candidates, corpus, clusters)
+
+    assert len(calls) == 1
+    _, kwargs = calls[0]
+    assert kwargs["description_weight"] == 0.6
 
 
 def test_every_delivered_paper_carries_its_extracted_fields(weekly_config, stubbed):

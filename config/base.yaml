@@ -69,6 +69,15 @@ search:
   sources: ['pubmed','europepmc','crossref','openalex'] # Query-style sources used by the weekly digest.
   n_clusters: 5           # How many themes to group the Zotero corpus into.
   per_cluster_limit: 25   # Max candidates fetched per cluster per source.
+  # A candidate's cluster is picked by blending two signals: the mean
+  # similarity to a theme's corpus members (diffuse — a paper that merely
+  # shares surface vocabulary with a theme's papers can score well here even
+  # when it isn't really about what the theme covers), and the candidate's
+  # similarity to the theme's own one-sentence description (sharper, since
+  # the description is a deliberate topical summary). This is the weight on
+  # the description signal; 0 disables it and falls back to corpus-mean-only
+  # routing, 1 ignores the corpus signal entirely.
+  cluster_assignment_description_weight: 0.6
   cluster_cache: state/theme_clusters.json  # Rebuilt only when the corpus changes.
   profile_cache: state/query_profiles.json  # Rebuilt only when the cluster set changes.
   seen_state: state/seen_dois.json          # DOIs already delivered, for cross-week de-duplication.
