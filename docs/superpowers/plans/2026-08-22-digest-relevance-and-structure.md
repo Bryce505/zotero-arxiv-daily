@@ -1694,7 +1694,7 @@ def test_email_renders_without_a_triage_verdict():
 
 def test_email_shows_relevance_in_the_cluster_rows():
     html = render_email_html(one_paper_digest(judged_paper()), LIST_SPECS)
-    assert "82" in html
+    assert "相关度 82" in html
 
 
 def test_email_still_fits_its_byte_budget():
@@ -1968,7 +1968,7 @@ def test_the_quota_is_allocated_only_among_survivors(weekly_config, stubbed):
     assert sum(len(papers) for _, papers in digest.clusters) == 1
 
 
-def test_a_journal_on_the_list_earns_its_bonus_end_to_end(weekly_config, stubbed):
+def test_an_abbreviated_journal_name_does_not_match_the_full_title(weekly_config, stubbed):
     # make_candidate() sets journal="J Chromatogr A"; the fixture lists
     # "Journal of Chromatography A", which must NOT match an abbreviation.
     digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
