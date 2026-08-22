@@ -1,8 +1,10 @@
 """Turn each theme cluster into the query forms the sources need.
 
-Two waves, following the literature-search methodology: a natural-language
-query for the relevance-ranked sources (Crossref, OpenAlex, Europe PMC), and a
-quoted boolean query with MeSH terms for PubMed.
+Three forms, because the sources do not read a query the same way: a quoted
+boolean query with MeSH terms for PubMed, a natural-language query for
+Crossref's relevance ranking, and the free terms OR'd together for Europe PMC
+and OpenAlex, which AND the words of a query and answer a long one with
+nothing at all.  See ``query_for_source``.
 """
 
 import hashlib
@@ -27,6 +29,35 @@ class QueryProfile:
     free_terms: list[str]
     pubmed_query: str
     plain_query: str
+
+
+# Europe PMC and OpenAlex AND the terms of a query together, so the long
+# natural-language query that suits Crossref's relevance ranking asks them for
+# a record containing all twenty-odd words and they return nothing at all.
+# Measured on the first live run: Crossref 65 hits, these two 0 across every
+# cluster.  They get the free terms OR'd instead.
+_CONJUNCTIVE_SOURCES = frozenset({"europepmc", "openalex"})
+_MAX_OR_TERMS = 12
+
+
+def or_join(terms: list[str]) -> str:
+    """Quote and OR *terms* into one boolean clause."""
+    quoted = [f'"{t.strip()}"' for t in terms if t and t.strip()]
+    return " OR ".join(quoted[:_MAX_OR_TERMS])
+
+
+def query_for_source(profile: QueryProfile, source: str) -> str:
+    """Return the query form *source* can actually answer.
+
+    Falls back to the natural-language query whenever the preferred form is
+    missing, so a degraded profile still searches rather than searching for an
+    empty string.
+    """
+    if source == "pubmed":
+        return profile.pubmed_query or profile.plain_query
+    if source in _CONJUNCTIVE_SOURCES:
+        return or_join(profile.free_terms) or profile.plain_query
+    return profile.plain_query
 
 
 def _cluster_fingerprint(clusters: list[ThemeCluster]) -> str:

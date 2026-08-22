@@ -18,7 +18,7 @@ email:
   sender: ${oc.env:SENDER}
   receiver: ${oc.env:SENDER}
   smtp_server: smtp.gmail.com
-  smtp_port: 587
+  smtp_port: 465
   sender_password: ${oc.env:SENDER_PASSWORD}
 
 llm:
@@ -31,15 +31,22 @@ llm:
 
 reranker:
   vector_cache: state/corpus_vectors.npz
+  api:
+    key: ${oc.env:EMBEDDING_API_KEY}
+    base_url: https://api.siliconflow.cn/v1
+    model: BAAI/bge-m3
+    batch_size: 32
 
 executor:
-  reranker: local
+  reranker: api
   debug: ${oc.env:DEBUG,null}
   source: ['biorxiv']
+  max_paper_num: 15
+  send_empty: true
 
 source:
   biorxiv:
-    category: ["biochemistry"]
+    category: ["biochemistry", "bioengineering", "molecular biology"]
 ```
 
 ### 每一段为什么这么写
@@ -48,9 +55,11 @@ source:
 | --- | --- |
 | `include_path: ["文献", "文献/**"]` | 两条缺一不可。`文献/**` 不匹配「文献」这个根分类本身。冒烟测试实测覆盖 111/112 篇 |
 | `receiver: ${oc.env:SENDER}` | 原来指向 `RECEIVER`，而周报 workflow 不导出这个 secret。指向 `SENDER` 让日报流程照常，周报走 `RECIPIENTS` |
-| `smtp_gmail / 587` | 原模板是 QQ 邮箱的 `smtp.qq.com:465`。你用 Gmail，587 走 STARTTLS |
+| `smtp_port: 465` | **别改成 587。** STARTTLS 失败后的 SSL 回退用的是**同一个端口**，465 走「STARTTLS 失败 → SSL 回退」这条已在生产验证的路；587 一旦 STARTTLS 出问题，回退到 587 的 SSL 是死路 |
 | **`language: 中文`** | **最容易踩的坑。** 默认是 `English`，不写这行，你的 背景/待解决的问题/方法/结论/洞见 会全部输出英文 |
-| `vector_cache` | 缓存语料向量。每周省掉约 7 分钟固定开销（实测 3.9 秒/篇 × 111 篇） |
+| **`executor.reranker: api`** | **首跑最大的教训。** 本地 reranker 在 GitHub 免费 runner 上耗时极不稳定：同样的语料，一次 69 秒，另一次 31 分钟（run 32494449956 对 32495539309），差 27 倍。这是共享 runner 的 CPU 争用，改不了 |
+| `model: BAAI/bge-m3` | 多语言模型。你库里有中文文献，原来的 `jina-...-nano` 对中文的表现从未验证过 |
+| `vector_cache` | 缓存语料向量，跨周复用。走 API 后省的是调用次数而非 CPU 时间 |
 | `executor.source` / `source.biorxiv` | 只给日报流程 `main.yml` 用。周报走 `search.sources`，不读这两项 |
 
 > `search`、`fulltext`、`report`、`git` 四段**不用写**——`base.yaml` 里已有可用默认值，且 `NCBI_API_KEY`、`CONTACT_EMAIL`、`RECIPIENTS` 会自动注入。
@@ -68,16 +77,19 @@ Settings → Secrets and variables → Actions → **Secrets**：
 | `OPENAI_API_KEY` | ✅ | 指向 DeepSeek。名字是协议名，不是厂商名 |
 | `OPENAI_API_BASE` | ✅ | |
 | `NCBI_API_KEY` | ✅ | PubMed 限速 3→10 req/s |
-| `CONTACT_EMAIL` | ✅ | 一个值喂四处：PubMed、Crossref 与 OpenAlex 的 polite pool、**以及 Unpaywall**。不填 Unpaywall 那级阶梯直接跳过 |
+| `CONTACT_EMAIL` | ✅ | 一个值喂四处：PubMed、Crossref 与 OpenAlex 的 polite pool、**以及 Unpaywall**。首跑时这条是空的，Unpaywall 整级被跳过，全文命中率因此只有 1/25 |
 | `SENDER` | ✅ | |
 | `SENDER_PASSWORD` | ✅ | Gmail 应用专用密码 |
-| **`RECIPIENTS`** | ❌ **需新建** | 组员邮箱，逗号分隔。全部走 Bcc 互相隐藏 |
+| `RECIPIENTS` | ✅ | 组员邮箱，逗号分隔。全部走 Bcc 互相隐藏 |
+| **`EMBEDDING_API_KEY`** | ❌ **需新建** | 硅基流动等 embedding 服务的 key（https://cloud.siliconflow.cn/ ）。四个 workflow 都已导出它；**配置里引用了它却不建这个 secret，run 会在配置组装阶段直接崩** |
 
-`RECIPIENTS` 填法（一行，逗号或分号分隔都行）：
+`RECIPIENTS` 填法（一行，逗号或分号分隔都行）。域名不限，QQ、公司邮箱、Gmail 混填都可以——收件地址与发信认证无关：
 
 ```
-zhang@corp.com, li@corp.com, wang@corp.com
+zhang@qq.com, li@yourcompany.com, wang@outlook.com
 ```
+
+> 企业邮件网关（Proofpoint、Mimecast、Defender）常默认剥离 `.html` 附件。首跑实测两个收件人都完整收到了正文与附件，但换新域名时值得先单发一个地址验证。
 
 ---
 
@@ -91,7 +103,7 @@ zhang@corp.com, li@corp.com, wang@corp.com
 
 （三个新 workflow 实测都是 `active` 状态，不需要手动启用。若你的环境显示被禁用，先点 Enable。）
 
-**实测输出**（2026-08-21，run 32489096144，跑在合并后的 `main` 上）：
+**实测输出**（2026-08-21，run 32494340286）：
 
 ```
 Preflight
@@ -102,13 +114,15 @@ Preflight
 [ OK ] europepmc    2 probe results
 [ OK ] crossref     1 probe results
 [ OK ] openalex     1 probe results
-[FAIL] recipients   no recipients resolved; set the RECIPIENTS secret (comma separated)
+[ OK ] recipients   2 recipients, all Bcc
 [ OK ] smtp         smtp.gmail.com accepted the login
 ────────────────────────────────────────────────────────────
-FAIL — 1 check(s) must be fixed before the weekly run
+PASS — every check succeeded
 ```
 
-这次实测确认了四个查询式检索器在**真实 API** 上都能正确解析响应——此前它们只有桩数据覆盖。整个探测耗时 26 秒。
+这次实测确认了四个查询式检索器在**真实 API** 上都能正确解析响应。整个探测耗时 26 秒。
+
+> **预检探测用的检索式，与周报实际下发的是同一套。** 首跑时不是这样——预检用两个词的短查询，周报下发的是十几个词的长句，结果 Europe PMC 与 OpenAlex 在预检全绿的情况下于正式跑中返回 0 篇。现在探测走 `query_for_source()` 同一条路径，这个盲区已封死。
 
 有 `FAIL` 就不要跑周报，先按提示修。`WARN` 不阻塞运行，但值得看一眼——比如上面那条 `llm` 警告，意味着你的周报会全出英文。
 
@@ -137,34 +151,40 @@ Full text resolved for N/M papers    ← OA 命中率
 Digest sent to N recipients with M attachments
 ```
 
+**每个源都该有产出。** 首跑时 Europe PMC 与 OpenAlex 在全部五个簇上都返回 0 篇，而 Crossref 返回 65 篇——同一条检索式。原因是这两个源把查询里的词**隐式 AND** 起来，要求一篇文献同时命中十几个词；Crossref 的 `query.bibliographic` 是相关性排序，永远返回最佳匹配。现在 `query_for_source()` 按源下发不同形式：PubMed 拿布尔式，Crossref 拿自然语言句，Europe PMC 与 OpenAlex 拿 `free_terms` 的 OR 拼接。**如果某个源又整列为 0，先怀疑检索式形式，不是源挂了。**
+
 **最该核对的是聚类结果。** 打开 `state/theme_clusters.json`，看那几个簇名是否符合你对自己文献库的直觉。这一步决定了后面所有检索式的方向——聚错了，整周的检索都会偏。不满意就删掉这个文件重跑，或者手工改簇名与描述（`member_titles` 按标题匹配，改名不影响归属）。
 
 ---
 
-## 5. 已知限制
+## 5. 首跑实测与已知限制
 
-**部分经真实环境验证。** 预检已在 Actions 上实跑（run 32489096144）：Zotero、DeepSeek、四个检索源、SMTP 登录全部实测通过。
+**完整管线已端到端跑通**（run 32495539309，2026-08-21）：25 篇送达 2 个收件人、2 个附件，归档提交 `5479ffc` 并推回 main。实测耗时 **53.7 分钟**，分段如下：
 
-**但完整周报管线仍未端到端跑过。** 未经真实验证的是中间那几段：主题聚类的质量、按簇配额的取数、OA 全文命中率、结构化抽取的输出、三层渲染与群发。这些只有 399 条桩数据测试覆盖。首跑仍可能暴露预料之外的东西——那是正常的，不是失败。
+| 阶段 | 实测 |
+| --- | --- |
+| Zotero 取数 + 过滤 | 6 秒（112 篇，111 篇匹配） |
+| 主题聚类（LLM） | 2 分钟 |
+| 检索式蒸馏（LLM） | 3.5 分钟 |
+| 四源检索 | 26 秒 |
+| **语料 embedding（本地）** | **31 分钟** |
+| **候选 embedding（本地）** | **11.8 分钟** |
+| 全文抓取 25 篇 | 1 分钟 |
+| 逐篇结构化抽取 | 3.3 分钟（≈7 秒/篇） |
+
+**本地 reranker 的耗时不可预测，这是换 embedding API 的真正理由。** 同样的语料，被取消的那次跑（run 32494449956）只用了 **69 秒**，这次用了 **31 分钟**——差 27 倍。原因是 GitHub 免费 runner 的 CPU 争用，不是代码问题，也无法通过优化代码解决。§1 的配置已默认改用 API。
+
+**主题聚类质量良好。** 五个簇分别是 HCP 分析(19)、蛋白质结构与质谱表征(20)、电荷异质性与电泳分离(25)、色谱电泳纯度与含量(23)、免疫分析与酶学检测(24)，分布均衡且直接对应 CMC 三大块业务，没有出现塌缩。
+
+**选题存在轻微漂移。** 首跑混进了绿蝇幼虫氨基酸 CE-MS、抗 dsDNA 临床免疫检测等方法学沾边但非 CMC 的文献。这是相似度排序的固有特性，可通过收紧 `search.per_cluster_limit` 或在 profile 里加排除词缓解。
+
+**OA 全文命中率取决于 `CONTACT_EMAIL`。** 首跑该 secret 为空，Unpaywall 整级阶梯被跳过，25 篇只解析出 1 篇全文。补上后应有明显改善——但仍受限于本领域期刊的开放获取比例，不要期待高命中率。周报末尾的「需人工取全文」清单就是为此设计的。
 
 **语料超过约 400 篇时聚类会退化。** 现在的做法是把整个文献库标题塞进一个 prompt 并要求返回每篇的归属。超过 300 篇会自动改为采样，未采样的篇目全部并入最大簇——语义上很粗糙。你现在 112 篇，按每年增长 100 篇算，大约三年后需要换一套归属策略（用 embedding 相似度而非 LLM 直接分配）。届时日志里会有明确告警。
 
-**重排仍是大头。** 语料向量缓存只砍掉固定的那 7 分钟；候选文献每周都是新的，缓存不了。候选 200 篇约 13 分钟，600 篇约 39 分钟。真要解决得换 embedding API（硅基流动 bge-m3、智谱等），仓库已有 `api` reranker，**改配置即可，不用写代码**：
+**中英混合语料的 embedding 质量仍需人工核对。** 你的库里有中文文献（如「全柱成像毛细管等电聚焦电泳分析尤瑞克林电荷异质性方法的建立与应用」）。改用多语言的 `BAAI/bge-m3` 后风险降低，但仍建议在下次跑完后核对：那几篇中文文献被分到了哪个簇、排序是否合理。
 
-```yaml
-executor:
-  reranker: api
-reranker:
-  api:
-    key: ${oc.env:EMBEDDING_API_KEY}
-    base_url: https://api.siliconflow.cn/v1
-    model: BAAI/bge-m3
-  vector_cache: state/corpus_vectors.npz
-```
-
-**中英混合语料的 embedding 质量未验证。** 你的库里有中文文献（如「全柱成像毛细管等电聚焦电泳分析尤瑞克林电荷异质性方法的建立与应用」）。当前 `jina-embeddings-v5-text-nano-retrieval` 对中文的处理强弱会直接影响相似度计算，需要在首跑后人工核对：那几篇中文文献被分到了哪个簇、排序是否合理。
-
-**上图代理未接入，且不建议接。** 理由见方案文档发现 4：许可条款禁止机器人访问、封禁会落到机构账号影响全馆读者、Actions runner 是境外数据中心 IP 会触发地域限制、把出版商 PDF 存进仓库并群发已超出个人使用范围。周报末尾的「需人工取全文」清单就是为此设计的兜底。
+**上图代理未接入，且不建议接。** 理由见方案文档发现 4：许可条款禁止机器人访问、封禁会落到机构账号影响全馆读者、Actions runner 是境外数据中心 IP 会触发地域限制、把出版商 PDF 存进仓库并群发已超出个人使用范围。
 
 ---
 

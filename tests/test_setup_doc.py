@@ -16,12 +16,13 @@ from hydra.core.global_hydra import GlobalHydra
 REPO = Path(__file__).resolve().parent.parent
 DOC = REPO / "docs" / "cmc-weekly-setup.md"
 
-# Exactly what .github/workflows/weekly.yml exports.
+# What .github/workflows/weekly.yml exports; the guard below keeps this honest.
 WORKFLOW_ENV = {
     "ZOTERO_ID": "000",
     "ZOTERO_KEY": "zk",
     "OPENAI_API_KEY": "sk",
     "OPENAI_API_BASE": "https://api.deepseek.com",
+    "EMBEDDING_API_KEY": "sk-embed",
     "NCBI_API_KEY": "ncbi",
     "CONTACT_EMAIL": "me@corp.com",
     "SENDER": "me@corp.com",
@@ -104,3 +105,40 @@ def test_the_secrets_table_lists_every_secret_the_workflow_exports():
     exported = set(re.findall(r"^\s+([A-Z_]+): \$\{\{ secrets\.", workflow, flags=re.M))
     for name in exported:
         assert name in doc, f"{name} is exported by weekly.yml but absent from the setup guide"
+
+
+# Every workflow that pastes CUSTOM_CONFIG into config/custom.yaml and then runs
+# the pipeline. A variable the config interpolates without a default must be
+# exported by all of them, or that workflow dies at config-composition time.
+CONFIG_CONSUMING_WORKFLOWS = ("main.yml", "weekly.yml", "monthly.yml", "preflight.yml")
+
+_ENV_NAME_RE = re.compile(r"^\s{8,}([A-Z][A-Z0-9_]*):\s", re.MULTILINE)
+_INTERPOLATION_RE = re.compile(r"\$\{oc\.env:([A-Z][A-Z0-9_]*)(,[^}]*)?\}")
+
+
+def exported_env(workflow: str) -> set[str]:
+    text = (REPO / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+    return set(_ENV_NAME_RE.findall(text))
+
+
+def required_env(config_text: str) -> set[str]:
+    """Names interpolated with no default, so an absent value is fatal."""
+    return {name for name, default in _INTERPOLATION_RE.findall(config_text) if not default}
+
+
+def test_every_variable_the_documented_config_needs_is_exported_by_every_workflow():
+    """A guard for the whole class of bug that has now bitten twice.
+
+    Declaring a key in the config without wiring the secret into the workflows
+    fails at interpolation, before a single line of the pipeline runs — and
+    only on the scheduled run, never in tests.
+    """
+    needed = required_env(documented_custom_config())
+    assert needed, "the documented config interpolates nothing; the regex must have rotted"
+
+    missing = {
+        workflow: sorted(needed - exported_env(workflow))
+        for workflow in CONFIG_CONSUMING_WORKFLOWS
+        if needed - exported_env(workflow)
+    }
+    assert not missing, f"workflows do not export variables the documented config needs: {missing}"

@@ -8,6 +8,7 @@ import pytest
 from omegaconf import OmegaConf, open_dict
 
 from zotero_arxiv_daily.protocol import CorpusPaper, Paper
+from zotero_arxiv_daily.search.profile import QueryProfile
 from zotero_arxiv_daily.weekly import WeeklyExecutor
 
 
@@ -470,3 +471,48 @@ def test_an_unusable_vector_cache_falls_back_instead_of_failing(weekly_config, s
     weekly_config.reranker.vector_cache = "state/corpus_vectors.npz"
     digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
     assert digest is not None
+
+
+def test_each_source_receives_the_query_form_it_can_answer(weekly_config, monkeypatch):
+    """Europe PMC and OpenAlex AND the terms of a query together.
+
+    Handing them the long natural-language query that Crossref's relevance
+    ranking absorbs asks for a record containing every word, and they answer
+    with nothing — measured on the first live run as 0 hits from both across
+    all five clusters while Crossref returned 65.
+    """
+    recorded = []
+
+    def retriever_for(name):
+        class Stub:
+            def __init__(self, config):
+                pass
+
+            def search(self, query, start, end, limit):
+                recorded.append((name, query))
+                return []
+
+        return Stub
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.get_query_retriever_cls", retriever_for)
+    with open_dict(weekly_config):
+        weekly_config.search.sources = ["pubmed", "europepmc", "openalex", "crossref"]
+
+    executor = WeeklyExecutor.__new__(WeeklyExecutor)
+    executor.config = weekly_config
+    profile = QueryProfile(
+        cluster="色谱电泳纯度与含量分析",
+        mesh_terms=[],
+        free_terms=["size exclusion chromatography", "CE-SDS"],
+        pubmed_query="BOOLEAN[tiab]",
+        plain_query="SEC CE-SDS HIC HPLC purity content analysis protein size variants",
+    )
+
+    executor._search_all([profile], date(2026, 8, 14), date(2026, 8, 21))
+
+    assert dict(recorded) == {
+        "pubmed": "BOOLEAN[tiab]",
+        "europepmc": '"size exclusion chromatography" OR "CE-SDS"',
+        "openalex": '"size exclusion chromatography" OR "CE-SDS"',
+        "crossref": "SEC CE-SDS HIC HPLC purity content analysis protein size variants",
+    }

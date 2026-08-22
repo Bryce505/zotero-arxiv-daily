@@ -24,9 +24,21 @@ from openai import OpenAI
 from zotero_arxiv_daily.executor import Executor
 from zotero_arxiv_daily.mailer import SMTP_TIMEOUT_SECONDS, resolve_recipients
 from zotero_arxiv_daily.retriever import get_query_retriever_cls
+from zotero_arxiv_daily.search.profile import QueryProfile, query_for_source
 
 _PROBE_LIMIT = 2
 _THIN_FILTER_RATIO = 0.2
+
+# Routed through ``query_for_source`` so each source is probed with the query
+# form it will actually receive.  A probe that skips that step passes while
+# production returns nothing, which is exactly what happened on the first run.
+_PROBE_PROFILE = QueryProfile(
+    cluster="preflight probe",
+    mesh_terms=["Antibodies, Monoclonal"],
+    free_terms=["monoclonal antibody", "mass spectrometry"],
+    pubmed_query='"monoclonal antibody"[tiab]',
+    plain_query="monoclonal antibody characterisation by mass spectrometry",
+)
 
 
 @dataclass
@@ -104,7 +116,8 @@ def check_sources(config: DictConfig) -> list[CheckResult]:
     for name in config.search.sources:
         try:
             retriever = get_query_retriever_cls(name)(config)
-            found = retriever.search("monoclonal antibody", start, end, _PROBE_LIMIT)
+            query = query_for_source(_PROBE_PROFILE, name)
+            found = retriever.search(query, start, end, _PROBE_LIMIT)
         except Exception as exc:  # noqa: BLE001
             results.append(CheckResult(name=name, ok=False, detail=f"unreachable: {exc}"))
             continue

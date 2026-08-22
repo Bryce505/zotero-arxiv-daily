@@ -38,7 +38,7 @@ from zotero_arxiv_daily.reranker.base import time_decay_weights
 from zotero_arxiv_daily.reranker.vector_cache import cached_similarity_matrix
 from zotero_arxiv_daily.retriever import get_query_retriever_cls
 from zotero_arxiv_daily.search.cluster import assign_clusters, load_or_build_clusters
-from zotero_arxiv_daily.search.profile import load_or_build_profiles
+from zotero_arxiv_daily.search.profile import load_or_build_profiles, query_for_source
 from zotero_arxiv_daily.weeknum import library_dir, report_paths, week_label, week_window
 
 
@@ -87,11 +87,7 @@ class WeeklyExecutor(Executor):
         for source in self.config.search.sources:
             retriever = get_query_retriever_cls(source)(self.config)
             for profile in profiles:
-                query = (
-                    profile.pubmed_query
-                    if source == "pubmed" and profile.pubmed_query
-                    else profile.plain_query
-                )
+                query = query_for_source(profile, source)
                 found = retriever.search(query, start, end, limit)
                 logger.info(f"{source}/{profile.cluster}: {len(found)} candidates")
                 candidates.extend(found)

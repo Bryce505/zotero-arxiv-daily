@@ -10,6 +10,7 @@ from zotero_arxiv_daily.search.profile import (
     QueryProfile,
     distill_profile,
     load_or_build_profiles,
+    query_for_source,
 )
 
 LLM_PARAMS = {"generation_kwargs": {"model": "stub-model"}}
@@ -127,3 +128,59 @@ def test_a_failed_distillation_is_not_cached(tmp_path):
 
     recovered = load_or_build_profiles(path, clusters, make_corpus(), stub_client(PAYLOAD), LLM_PARAMS)
     assert "[MeSH]" in recovered[0].pubmed_query
+
+
+class TestQueryForSource:
+    """Which query form each source is given.
+
+    Europe PMC and OpenAlex AND their terms together, so the long
+    natural-language ``plain_query`` that suits Crossref's relevance ranking
+    returns nothing at all on them (measured: 0 hits across all five clusters
+    while Crossref returned 65).
+    """
+
+    PROFILE = QueryProfile(
+        cluster="色谱电泳纯度与含量分析",
+        mesh_terms=["Chromatography, High Pressure Liquid"],
+        free_terms=["size exclusion chromatography", "CE-SDS", "protein aggregates"],
+        pubmed_query='("Chromatography, Gel"[MeSH] OR SEC[tiab])',
+        plain_query="SEC CE-SDS HIC HPLC purity content analysis protein size variants aggregates",
+    )
+
+    def test_europepmc_gets_free_terms_joined_with_or(self):
+        query = query_for_source(self.PROFILE, "europepmc")
+        assert query == (
+            '"size exclusion chromatography" OR "CE-SDS" OR "protein aggregates"'
+        )
+
+    def test_openalex_gets_free_terms_joined_with_or(self):
+        query = query_for_source(self.PROFILE, "openalex")
+        assert query == (
+            '"size exclusion chromatography" OR "CE-SDS" OR "protein aggregates"'
+        )
+
+    def test_crossref_keeps_the_natural_language_query(self):
+        assert query_for_source(self.PROFILE, "crossref") == self.PROFILE.plain_query
+
+    def test_pubmed_keeps_its_boolean_query(self):
+        assert query_for_source(self.PROFILE, "pubmed") == self.PROFILE.pubmed_query
+
+    def test_conjunctive_source_falls_back_to_plain_query_without_free_terms(self):
+        bare = QueryProfile(
+            cluster="c",
+            mesh_terms=[],
+            free_terms=[],
+            pubmed_query="",
+            plain_query="charge variant analysis",
+        )
+        assert query_for_source(bare, "europepmc") == "charge variant analysis"
+
+    def test_pubmed_falls_back_to_plain_query_without_a_boolean_query(self):
+        bare = QueryProfile(
+            cluster="c",
+            mesh_terms=[],
+            free_terms=["charge variant"],
+            pubmed_query="",
+            plain_query="charge variant analysis",
+        )
+        assert query_for_source(bare, "pubmed") == "charge variant analysis"

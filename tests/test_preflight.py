@@ -329,3 +329,37 @@ def test_a_warning_alone_does_not_fail_preflight(monkeypatch):
     monkeypatch.setattr("zotero_arxiv_daily.preflight.check_sources", lambda c: [])
     ok, _ = run_preflight(make_config())
     assert ok is True
+
+
+def test_the_probe_uses_the_same_query_form_each_source_gets_in_production(monkeypatch):
+    """A probe that bypasses the production query selection gives a false green.
+
+    The first live run passed preflight on a two-word probe and then returned
+    0 candidates from Europe PMC and OpenAlex, because those two AND their
+    terms and production hands them a different query form than Crossref.
+    """
+    probed = {}
+
+    def retriever_for(name):
+        class Stub:
+            def __init__(self, config):
+                pass
+
+            def search(self, query, start, end, limit):
+                probed[name] = query
+                return []
+
+        return Stub
+
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.preflight.get_query_retriever_cls", retriever_for
+    )
+    config = make_config()
+    config.search.sources = ["pubmed", "europepmc", "openalex", "crossref"]
+
+    check_sources(config)
+
+    assert " OR " in probed["europepmc"], "a conjunctive source needs an OR'd probe"
+    assert probed["openalex"] == probed["europepmc"]
+    assert probed["pubmed"] != probed["crossref"], "PubMed takes its boolean form"
+    assert " OR " not in probed["crossref"], "Crossref takes the natural-language form"
