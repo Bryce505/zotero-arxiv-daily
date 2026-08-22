@@ -480,6 +480,15 @@ def test_a_journal_list_that_is_not_a_list_fails():
     assert "allow" in result.detail
 
 
+def test_a_journal_allow_mapping_fails_instead_of_being_read_as_names():
+    # A YAML hand-edit that turns a sequence into a mapping (`allow:` with
+    # nested `key: value` pairs instead of a `- item` list) must not be read
+    # as a name list built from the mapping's keys.
+    result = check_report_config(report_config(journals={"bonus": 10, "allow": {"mAbs": True}}))
+    assert not result.ok
+    assert "allow" in result.detail
+
+
 def test_an_unknown_field_kind_fails():
     fields = [{"key": "method", "label": "方法", "instruction": "i", "kind": "bullets"}]
     result = check_report_config(report_config(fields=fields))
@@ -498,6 +507,25 @@ def test_a_zero_triage_batch_fails():
 def test_zeroed_thresholds_are_allowed():
     # Setting both to 0 is the documented way to disable the gate.
     assert check_report_config(report_config(min_relevance=0, min_score=0)).ok
+
+
+def test_a_negative_journal_bonus_fails():
+    result = check_report_config(report_config(journals={"bonus": -1, "allow": ["mAbs"]}))
+    assert not result.ok
+    assert "journals.bonus" in result.detail
+
+
+def test_a_non_integer_industry_bonus_fails():
+    # What a config typo (bonus: "ten") actually produces: preflight must
+    # catch it, not let it reach scoring.py's int(value.get("bonus")) mid-run.
+    result = check_report_config(report_config(industry={"bonus": "ten", "names": ["Amgen"]}))
+    assert not result.ok
+    assert "industry.bonus" in result.detail
+
+
+def test_a_normal_bonus_including_zero_passes():
+    assert check_report_config(report_config(journals={"bonus": 0, "allow": ["mAbs"]})).ok
+    assert check_report_config(report_config(industry={"bonus": 12, "names": ["Amgen"]})).ok
 
 
 def test_empty_name_lists_are_allowed():

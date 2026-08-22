@@ -50,6 +50,28 @@ def test_openalex_deduplicates_repeated_institutions(config):
     assert paper.institutions == ["Amgen Inc.", "Stanford University"]
 
 
+def test_openalex_keeps_a_company_flag_seen_only_on_a_later_occurrence(config):
+    # Same institution name across two authorships: the first occurrence
+    # carries no "company" type, only the second does. Dedup-by-name must
+    # not suppress that second occurrence before its type is read.
+    work = dict(
+        OPENALEX_WORK,
+        authorships=[
+            {
+                "author": {"display_name": "A Researcher"},
+                "institutions": [{"display_name": "Amgen Inc."}],
+            },
+            {
+                "author": {"display_name": "B Researcher"},
+                "institutions": [{"display_name": "Amgen Inc.", "type": "company"}],
+            },
+        ],
+    )
+    paper = OpenalexRetriever(config)._to_paper(work, is_backfill=False)
+    assert paper.institutions == ["Amgen Inc."]
+    assert paper.company_institutions == ["Amgen Inc."]
+
+
 PUBMED_XML = """
 <PubmedArticle><MedlineCitation><PMID>1</PMID><Article>
   <ArticleTitle>A paper</ArticleTitle>

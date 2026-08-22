@@ -2,9 +2,10 @@
 
 from zotero_arxiv_daily.protocol import Paper
 from zotero_arxiv_daily.quota import allocate_quota, take_by_quota
+from zotero_arxiv_daily.scoring import ScoreBreakdown
 
 
-def make_paper(title: str, cluster: str, score: float) -> Paper:
+def make_paper(title: str, cluster: str, score: float, **kw) -> Paper:
     return Paper(
         source="pubmed",
         title=title,
@@ -13,6 +14,7 @@ def make_paper(title: str, cluster: str, score: float) -> Paper:
         url="https://example.org/" + title,
         score=score,
         cluster=cluster,
+        **kw,
     )
 
 
@@ -110,3 +112,18 @@ def test_a_tight_total_spreads_as_evenly_as_it_can():
 def test_more_clusters_than_slots_still_sums_to_the_total():
     quota = allocate_quota({f"c{i}": 10 for i in range(9)}, total=4, min_per_cluster=3)
     assert sum(quota.values()) == 4
+
+
+def test_take_by_quota_orders_by_the_composite_score_not_raw_similarity():
+    """Regression: selection already used rank_score via passing_papers(), but
+    this final ordering step still sorted by raw embedding similarity."""
+    high_rank = make_paper(
+        "high-rank", "a", 1.0,
+        scoring=ScoreBreakdown(relevance=98, journal_hit=None, industry_hit=None, rank_score=98),
+    )
+    high_similarity = make_paper(
+        "high-similarity", "a", 99.0,
+        scoring=ScoreBreakdown(relevance=56, journal_hit=None, industry_hit=None, rank_score=56),
+    )
+    taken = take_by_quota([high_rank, high_similarity], {"a": 2})
+    assert [p.title for p in taken] == ["high-rank", "high-similarity"]

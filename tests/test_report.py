@@ -307,3 +307,35 @@ def test_email_still_fits_its_byte_budget():
     digest = build_digest(papers, [], date(2026, 8, 21), top_n=3)
     html = render_email_html(digest, LIST_SPECS, max_bytes=20000)
     assert len(html.encode("utf-8")) <= 20000
+
+
+def test_within_cluster_order_uses_the_composite_score_not_raw_similarity():
+    """Regression: bucket.sort() used raw embedding similarity, so a paper
+    the LLM scored much higher on relevance could still display below a
+    weaker paper that merely embedded closer to the corpus."""
+    high_rank = make_paper(
+        "high-rank", "membrane", 1.0,
+        scoring=ScoreBreakdown(relevance=98, journal_hit=None, industry_hit=None, rank_score=98),
+    )
+    high_similarity = make_paper(
+        "high-similarity", "membrane", 99.0,
+        scoring=ScoreBreakdown(relevance=56, journal_hit=None, industry_hit=None, rank_score=56),
+    )
+    digest = build_digest([high_similarity, high_rank], [], date(2026, 8, 21), top_n=2)
+    assert [p.title for p in digest.clusters[0][1]] == ["high-rank", "high-similarity"]
+    assert [p.title for p in digest.top_picks] == ["high-rank", "high-similarity"]
+
+
+def test_cluster_display_order_uses_the_composite_score_not_raw_similarity():
+    """Regression: the cluster ordering itself (which section appears first)
+    also used raw embedding similarity instead of the composite score."""
+    high_rank = make_paper(
+        "high-rank", "zzz-cluster", 1.0,
+        scoring=ScoreBreakdown(relevance=98, journal_hit=None, industry_hit=None, rank_score=98),
+    )
+    high_similarity = make_paper(
+        "high-similarity", "aaa-cluster", 99.0,
+        scoring=ScoreBreakdown(relevance=56, journal_hit=None, industry_hit=None, rank_score=56),
+    )
+    digest = build_digest([high_similarity, high_rank], [], date(2026, 8, 21), top_n=2)
+    assert [name for name, _ in digest.clusters] == ["zzz-cluster", "aaa-cluster"]

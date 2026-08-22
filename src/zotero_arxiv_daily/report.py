@@ -34,6 +34,16 @@ class Digest:
         return sum(len(papers) for _, papers in self.clusters) + len(self.backfill)
 
 
+def _rank_key(paper: Paper) -> float:
+    """Best-first sort key: the composite score when the paper was scored,
+    falling back to embedding similarity for any paper that reached here
+    without a ScoreBreakdown (should not happen once every survivor is
+    gated, but this must never crash)."""
+    if paper.scoring is not None:
+        return paper.scoring.rank_score
+    return paper.score or 0.0
+
+
 def build_digest(papers: list[Paper], backfill: list[Paper], anchor: date, top_n: int = 3) -> Digest:
     """Group *papers* into the shape the renderers consume."""
     start, end = week_window(anchor)
@@ -43,9 +53,9 @@ def build_digest(papers: list[Paper], backfill: list[Paper], anchor: date, top_n
     for paper in fresh:
         grouped.setdefault(paper.cluster or "未分类", []).append(paper)
     for bucket in grouped.values():
-        bucket.sort(key=lambda p: -(p.score or 0.0))
+        bucket.sort(key=lambda p: -_rank_key(p))
 
-    ordered = sorted(grouped.items(), key=lambda kv: (-max((p.score or 0.0) for p in kv[1]), kv[0]))
+    ordered = sorted(grouped.items(), key=lambda kv: (-max(_rank_key(p) for p in kv[1]), kv[0]))
 
     return Digest(
         label=week_label(anchor),
@@ -53,7 +63,7 @@ def build_digest(papers: list[Paper], backfill: list[Paper], anchor: date, top_n
         end=end,
         clusters=ordered,
         backfill=sorted(backfill, key=lambda p: -(p.cited_by_count or 0)),
-        top_picks=sorted(fresh, key=lambda p: -(p.score or 0.0))[:top_n],
+        top_picks=sorted(fresh, key=lambda p: -_rank_key(p))[:top_n],
         # Backfill included: a thin week is mostly backfill, which is exactly
         # when the manual-retrieval list matters.
         needs_manual=[p for p in fresh + list(backfill) if p.oa_status != "open"],

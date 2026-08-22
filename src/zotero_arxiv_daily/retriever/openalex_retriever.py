@@ -44,15 +44,20 @@ class OpenalexRetriever(BaseQueryRetriever):
         source_block = (work.get("primary_location") or {}).get("source") or {}
         oa = work.get("open_access") or {}
         institutions: list[str] = []
-        companies: list[str] = []
+        company_names: set[str] = set()
         for authorship in work.get("authorships") or []:
             for institution in authorship.get("institutions") or []:
                 name = (institution.get("display_name") or "").strip()
-                if not name or name in institutions:
+                if not name:
                     continue
-                institutions.append(name)
+                if name not in institutions:
+                    institutions.append(name)
+                # Checked on every occurrence, not just the first: a later
+                # authorship can carry the "company" type even when an
+                # earlier one listing the same institution did not.
                 if institution.get("type") == "company":
-                    companies.append(name)
+                    company_names.add(name)
+        companies = [name for name in institutions if name in company_names]
         return Paper(
             source="openalex",
             title=(work.get("title") or "").strip(),

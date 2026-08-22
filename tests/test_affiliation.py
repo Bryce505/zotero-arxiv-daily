@@ -95,4 +95,4 @@ def test_academic_affiliation_is_not_industry():
 def test_institutions_are_matched_one_by_one():
     # Joining them would let "Amgen Pfizer" match across a boundary that does
     # not exist in any single affiliation.
-    assert match_industry(["Amgen Research", "Pfizer Ltd"], [], ["Amgen Pfizer"]) is None
+    assert match_industry(["Amgen", "Pfizer"], [], ["Amgen Pfizer"]) is None

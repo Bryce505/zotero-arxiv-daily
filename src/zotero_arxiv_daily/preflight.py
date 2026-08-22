@@ -12,6 +12,7 @@ in about a minute.
 
 import smtplib
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -209,7 +210,9 @@ def _name_list(block, key: str, problems: list[str]) -> list[str]:
     raw = _safe_get(block, key)
     if raw is None:
         return []
-    if isinstance(raw, str) or not hasattr(raw, "__iter__"):
+    # A dict/DictConfig is iterable too (over its keys), which would silently
+    # turn a mis-edited mapping into a name list built from those keys.
+    if isinstance(raw, (str, Mapping)) or not hasattr(raw, "__iter__"):
         problems.append(f"{key} must be a list, got {type(raw).__name__}")
         return []
     return [str(n) for n in raw]
@@ -229,8 +232,10 @@ def check_report_config(config: DictConfig) -> CheckResult:
     problems: list[str] = []
     warnings: list[str] = []
 
-    journals = _name_list(_safe_get(report, "journals") or {}, "allow", problems)
-    companies = _name_list(_safe_get(report, "industry") or {}, "names", problems)
+    journals_block = _safe_get(report, "journals") or {}
+    industry_block = _safe_get(report, "industry") or {}
+    journals = _name_list(journals_block, "allow", problems)
+    companies = _name_list(industry_block, "names", problems)
 
     for label, names in (("journals", journals), ("companies", companies)):
         seen: dict[str, str] = {}
@@ -244,6 +249,10 @@ def check_report_config(config: DictConfig) -> CheckResult:
         value = _safe_get(report, key)
         if value is not None and (not isinstance(value, int) or value < 0):
             problems.append(f"{key} must be a non-negative integer, got {value!r}")
+    for label, block in (("journals.bonus", journals_block), ("industry.bonus", industry_block)):
+        value = _safe_get(block, "bonus")
+        if value is not None and (not isinstance(value, int) or value < 0):
+            problems.append(f"{label} must be a non-negative integer, got {value!r}")
     batch = _safe_get(report, "triage_batch")
     if batch is not None and (not isinstance(batch, int) or batch < 1):
         problems.append(f"triage_batch must be at least 1, got {batch!r}")

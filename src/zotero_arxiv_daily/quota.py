@@ -68,6 +68,16 @@ def allocate_quota(
     return quota
 
 
+def _rank_key(paper: Paper) -> float:
+    """Best-first sort key: the composite score when the paper was scored,
+    falling back to embedding similarity for any paper that reached here
+    without a ScoreBreakdown (should not happen once every survivor is
+    gated, but this must never crash)."""
+    if paper.scoring is not None:
+        return paper.scoring.rank_score
+    return paper.score or 0.0
+
+
 def take_by_quota(ranked: list[Paper], quota: dict[str, int]) -> list[Paper]:
     """Take each cluster's quota from *ranked*, then redistribute shortfalls.
 
@@ -92,4 +102,4 @@ def take_by_quota(ranked: list[Paper], quota: dict[str, int]) -> list[Paper]:
     if shortfall > 0:
         taken.extend(overflow[:shortfall])
 
-    return sorted(taken, key=lambda p: (p.score is None, -(p.score or 0.0)))
+    return sorted(taken, key=lambda p: -_rank_key(p))
