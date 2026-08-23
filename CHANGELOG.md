@@ -88,4 +88,4 @@ Fork 之后、动手写周报管线之前，先做了两件准备工作：
 - 完整逐条提交历史：`git log`（当前 201 次提交，含上游继承的部分）
 - 每次架构/需求决策的详细讨论：[`docs/cmc-literature-weekly-plan.md`](docs/cmc-literature-weekly-plan.md)
 - 部署与首跑实测记录：[`docs/cmc-weekly-setup.md`](docs/cmc-weekly-setup.md)
-- 各配置项的作用与调参方法：[`README.md`](README.md) 第 5–9 节；文件级别的项目结构见第 13 节
+- 项目背景、功能全貌、项目结构、各配置项的作用与调参方法：[`README.md`](README.md)
