@@ -1,8 +1,9 @@
 name: Send emails daily
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 22 * * *'
+  # No `schedule:` trigger: the daily pipeline is off by request now that the
+  # weekly digest (weekly.yml) is the primary workflow. Still runs on demand
+  # via "Run workflow" in the Actions tab if you ever want a one-off day.
 
 jobs:
   calculate-and-send:

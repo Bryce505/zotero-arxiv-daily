@@ -75,7 +75,7 @@ DOI: <https://doi.org/10.3390/separations13080236>
 
 **日报管线**（继承自上游，原样保留）
 
-- ✅ 按 Zotero 库嵌入相似度，每天从 arXiv / bioRxiv / medRxiv / chemRxiv 挑出当日新论文
+- ✅ 按 Zotero 库嵌入相似度，从 arXiv / bioRxiv / medRxiv / chemRxiv 当日新论文里挑出最相关的一批（默认手动触发，不自动排程，见[第 7 节](#7-快速开始)）
 - ✅ LLM 生成英文 TLDR，邮件推送
 
 **周报管线**（本仓库新增，核心）
@@ -307,7 +307,7 @@ flowchart TD
    ![Actions 页面手动触发一个 workflow](assets/trigger.png)
    *手动触发都是这个路径：Actions → 左侧选中对应 workflow → 右侧 Run workflow → 选分支 → 再点一次 Run workflow。预检和第 5 步的正式跑都用这个操作。*
 
-5. **手动触发一次正式跑**：日报是 **Send emails daily**，周报是 **CMC literature weekly digest**。之后日报每天 22:00 UTC、周报每周五 12:00 UTC 自动跑一次；月度综述（**CMC literature monthly synthesis**）每月 1 号 13:00 UTC 跑一次，可选，禁用不影响周报。
+5. **手动触发一次正式跑**：日报是 **Send emails daily**，周报是 **CMC literature weekly digest**。周报每周五 12:00 UTC 自动跑一次；月度综述（**CMC literature monthly synthesis**）每月 1 号 13:00 UTC 跑一次，可选，禁用不影响周报。**日报没有自动排程**，只能在 Actions 里手动 Run workflow——以周报为主之后就关掉了每天 22:00 UTC 的自动触发，代码和手动入口都还在，想找回自动排程只要给 `main.yml` 加回 `schedule:` 触发器。
 
 首次跑周报会比之后每周都慢——主题聚类、检索式蒸馏、语料向量三个缓存都是冷的，之后会命中缓存。首跑该看什么日志、常见的坑，[`docs/cmc-weekly-setup.md`](docs/cmc-weekly-setup.md) 第 4、5 节有实测记录，不在这里重复。
 
