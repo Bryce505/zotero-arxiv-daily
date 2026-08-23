@@ -75,7 +75,7 @@ DOI: <https://doi.org/10.3390/separations13080236>
 
 **日报管线**（继承自上游，原样保留）
 
-- ✅ 按 Zotero 库嵌入相似度，从 arXiv / bioRxiv / medRxiv / chemRxiv 当日新论文里挑出最相关的一批（默认手动触发，不自动排程，见[第 7 节](#7-快速开始)）
+- ✅ 按 Zotero 库嵌入相似度，从 arXiv / bioRxiv / medRxiv / chemRxiv 当日新论文里挑出最相关的一批（手动触发，不自动排程，见[第 5 节「自动排程」](#5-架构与运行流程)）
 - ✅ LLM 生成英文 TLDR，邮件推送
 
 **周报管线**（本仓库新增，核心）
@@ -113,7 +113,7 @@ zotero-arxiv-daily/
 │   ├── cmc-literature-weekly-plan.md   周报管线的设计文档：需求、架构决策的完整讨论过程
 │   └── cmc-weekly-setup.md             部署与首跑实测记录，含可直接复制的 CUSTOM_CONFIG 样例
 ├── assets/                         README 用到的配置截图
-├── .github/workflows/              main.yml（日报）/ weekly.yml（周报）/ monthly.yml / preflight.yml / ci.yml
+├── .github/workflows/              main.yml（日报）/ weekly.yml（周报）/ monthly.yml / preflight.yml / ci.yml / keep-alive.yml（防自动禁用，见第 5 节）
 │
 ├── reports/YYYY/YYYY-MM-Wn.md      〔生成〕周报 markdown，每周一份，永久归档
 ├── reports/YYYY/YYYY-MM-Wn.html    〔生成〕周报网页版，左侧目录 + 全文编号（见第 9 节）
@@ -248,6 +248,29 @@ flowchart TD
 
 数据类：`Paper` 与 `CorpusPaper` 定义在 `src/zotero_arxiv_daily/protocol.py`；`Paper` 上挂着调 LLM 的 `generate_tldr()` / `generate_affiliations()`，相关性分诊的结论存在 `paper.triage`（`TriageResult`：`relevance` / `reason` / `modalities`），综合分存在 `paper.scoring`。
 
+### 自动排程（schedule / cron）与保活
+
+三个工作流靠 GitHub Actions 的 `schedule` 触发器定时跑；日报（`main.yml`）现在没有排程，只能手动触发（见[第 7 节](#7-快速开始)）。
+
+| 工作流 | 文件 | cron | 触发时间（UTC / 北京时间） |
+| --- | --- | --- | --- |
+| 周报 | `weekly.yml` | `0 12 * * 5` | 每周五 12:00 / 周五 20:00 |
+| 月度综述 | `monthly.yml` | `0 13 1 * *` | 每月 1 号 13:00 / 21:00，可选 |
+| 保活 | `keep-alive.yml` | `0 0 */30 * *` | 约每 30 天一次，0:00 / 8:00 |
+
+cron 是 5 个字段，从左到右分别是分钟（0–59）、小时（0–23）、日（1–31）、月（1–12）、星期（0–6，0 是周日）；`*` 表示不限制，`/N` 表示步进。`0 12 * * 5` 读作「0 分 12 时，不管几号、不管几月，只要是周五」。GitHub Actions 的排程有几条容易忽略的限制：
+
+- **只认 UTC，没有时区设置**，换算成北京时间要 **+8**。
+- **高峰期可能延迟几分钟到十几分钟，不保证准点触发**——整点、UTC 0 点这类大家都爱用的时间点排队的 workflow 特别多。
+- **最短间隔 5 分钟**，写得更密会被 GitHub 忽略。
+- **「日」和「星期」两个字段是或的关系**：同时给出非 `*` 值时，命中一个就触发，不是两个都要满足——本仓库现有的 cron 都只用了其中一个字段，自己写新的要留意。
+- **只按默认分支（本仓库是 `main`）上的 workflow 文件生效**：改了 cron 要先 push 到 main，下一次触发才生效，正在排队的那次不受影响。
+- **仓库超过 60 天没有任何 commit，GitHub 会自动禁用这个仓库里所有的 scheduled workflow**——这条限制是 `keep-alive.yml` 存在的唯一原因。
+
+**`keep-alive.yml` 是做什么的：** 它自己每 30 天在 `.github/keep-alive.txt` 里写一行时间戳并提交，制造一次 commit，专门用来防止上面那条 60 天自动禁用规则被触发。它保护的是仓库里**全部**还在用排程的 workflow（`weekly.yml`、`monthly.yml`），不是针对某一个——只要周报还想自动跑，这个工作流就不能删。
+
+**改排程：** 编辑对应 `.github/workflows/*.yml` 里的 `cron:` 那一行，提交推送到 `main`。cron 写错不会报错，只会在该触发的时候悄悄不触发；改完最好去 Actions 页面手动 Run workflow 确认一遍管线本身没问题，排程是否生效只能等下一次真正到点才能验证。
+
 ## 6. 文章是怎么选出来的
 
 新手最常见的困惑是「这篇为什么进了周报、那篇为什么没有」。选文其实是一段两段式漏斗：先检索出一个大候选池，用嵌入相似度粗排，再用 LLM 逐篇判定「是不是真的和生物药相关」，最后按综合分和主题配额选定、不够再补位。下表逐级列出每一步淘汰了什么、由哪个参数控制：
@@ -307,7 +330,7 @@ flowchart TD
    ![Actions 页面手动触发一个 workflow](assets/trigger.png)
    *手动触发都是这个路径：Actions → 左侧选中对应 workflow → 右侧 Run workflow → 选分支 → 再点一次 Run workflow。预检和第 5 步的正式跑都用这个操作。*
 
-5. **手动触发一次正式跑**：日报是 **Send emails daily**，周报是 **CMC literature weekly digest**。周报每周五 12:00 UTC 自动跑一次；月度综述（**CMC literature monthly synthesis**）每月 1 号 13:00 UTC 跑一次，可选，禁用不影响周报。**日报没有自动排程**，只能在 Actions 里手动 Run workflow——以周报为主之后就关掉了每天 22:00 UTC 的自动触发，代码和手动入口都还在，想找回自动排程只要给 `main.yml` 加回 `schedule:` 触发器。
+5. **手动触发一次正式跑**：日报是 **Send emails daily**，周报是 **CMC literature weekly digest**。周报、月度综述之后会按各自的排程自动跑；日报没有排程，只能这样手动跑。各工作流具体几点触发、cron 怎么改，见[第 5 节「自动排程」](#5-架构与运行流程)。
 
 首次跑周报会比之后每周都慢——主题聚类、检索式蒸馏、语料向量三个缓存都是冷的，之后会命中缓存。首跑该看什么日志、常见的坑，[`docs/cmc-weekly-setup.md`](docs/cmc-weekly-setup.md) 第 4、5 节有实测记录，不在这里重复。
 
