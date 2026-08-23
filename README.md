@@ -100,9 +100,25 @@ LLM 分诊（相关度 0–100 + 推荐理由 + 命中的生物药类型）
 ## 4. 快速开始
 
 1. **Fork（并 Star）本仓库。** 建议保持私有——周报正文会带着你 Zotero 库的主题信息，且抓下来的 PDF 会提交进仓库。
+
+   ![Fork 按钮在仓库页面右上角](assets/fork.png)
+   *截图是 GitHub 旧版界面，仅示意 Fork/Star 按钮大致在哪；当前 GitHub 页面布局略有不同，但都在仓库页右上角。*
+
 2. **配置 Secrets**（仓库 Settings → Secrets and variables → Actions → **Secrets** 标签）。两条管线都要用到 `ZOTERO_ID`、`ZOTERO_KEY`、`SENDER`、`SENDER_PASSWORD`、`OPENAI_API_KEY`、`OPENAI_API_BASE`；只想跑周报还需要额外几个（完整清单、去哪申请见第 8 节和 [`docs/cmc-weekly-setup.md`](docs/cmc-weekly-setup.md) 第 2 节）。
+
+   ![Actions Secrets 配置页面](assets/secrets.png)
+   *页面路径（Settings → Secrets and variables → Actions → Secrets 标签 → New repository secret）没变；截图里列出的密钥名称是旧版示例，本仓库实际要填的名称以第 8 节的表格为准。*
+
 3. **配置 `CUSTOM_CONFIG` 变量**（同一页面 → **Variables** 标签）。这是运行时真正生效的配置来源，具体怎么写、和 `config/base.yaml` 怎么分工，见第 6 节；周报专用的完整样例见 [`docs/cmc-weekly-setup.md`](docs/cmc-weekly-setup.md) 第 1 节，可以直接复制粘贴。
+
+   ![New variable 页面，Name 填 CUSTOM_CONFIG](assets/config_var.png)
+   *Name 固定填 `CUSTOM_CONFIG`；Value 框里粘贴的内容以 [`docs/cmc-weekly-setup.md`](docs/cmc-weekly-setup.md) 第 1 节的完整样例为准，截图只演示填在哪个框。*
+
 4. **跑一次预检**：Actions → **CMC weekly preflight** → Run workflow。全绿再进行下一步；有 `FAIL` 先按提示修（第 9 节讲每一项验证什么）。
+
+   ![Actions 页面手动触发一个 workflow](assets/trigger.png)
+   *手动触发都是这个路径：Actions → 左侧选中对应 workflow → 右侧 Run workflow → 选分支 → 再点一次 Run workflow。预检和第 5 步的正式跑都用这个操作。*
+
 5. **手动触发一次正式跑**：日报是 **Send emails daily**，周报是 **CMC literature weekly digest**。之后日报每天 22:00 UTC、周报每周五 12:00 UTC 自动跑一次；月度综述（**CMC literature monthly synthesis**）每月 1 号 13:00 UTC 跑一次，可选，禁用不影响周报。
 
 首次跑周报会比之后每周都慢——主题聚类、检索式蒸馏、语料向量三个缓存都是冷的，之后会命中缓存。首跑该看什么日志、常见的坑，[`docs/cmc-weekly-setup.md`](docs/cmc-weekly-setup.md) 第 4、5 节有实测记录，不在这里重复。
@@ -187,6 +203,9 @@ OmegaConf.merge(base, custom).report.journals
 1. **改名单 / 改报告字段** → 打开仓库网页 → `config/base.yaml` → 铅笔图标编辑 → 改完 commit。网页编辑器认得 YAML，缩进错了会标红提示——这层保护是 Variables 的纯文本框没有的。
 2. **改密钥 / 改收件人** → 仓库 Settings → Secrets and variables → Actions → **Variables** 标签 → 编辑 `CUSTOM_CONFIG`。
 
+   ![Secrets and variables 页面下的 Variables 标签](assets/repo_var.png)
+   *容易和第 4 节配 Secrets 时的 Secrets 标签搞混——同一个页面，标签切到 Variables 才能看到 `CUSTOM_CONFIG`。*
+
 **两条路径改完都要跑一次 preflight**（Actions → CMC weekly preflight → Run workflow）——改名单/字段会被 `report-config` 检查校验（第 9 节第 1 项），比跑一次完整周报便宜得多。
 
 **改 Variables 不会影响正在跑的 job。** `${{ vars.CUSTOM_CONFIG }}` 在 job 启动那一刻就解析完毕，之后再改 Variables，那次 job 用的还是启动时的值；改 `config/base.yaml` 同理——workflow checkout 的是触发那一刻的 commit，晚一步的提交要等下一次触发才生效。
@@ -236,6 +255,9 @@ OmegaConf.merge(base, custom).report.journals
 | `NCBI_API_KEY` | 周报（可选） | 否 | PubMed E-utilities 限速从 3 提到 10 req/s，自助秒批 |
 | `CONTACT_EMAIL` | 周报（强烈建议） | 否 | 一个值喂四处：PubMed、Crossref 与 OpenAlex 的 polite pool，以及 **Unpaywall**——缺失时 Unpaywall 这一级会被整个跳过，全文命中率大幅下降 |
 | `DEBUG` | 两条都用（可选） | 否 | 调试模式开关 |
+
+![Zotero 设置页面里的 User ID](assets/userid.png)
+*`ZOTERO_ID` 就是这里的 User ID（Zotero 官网 → Settings → Security → Applications），不是登录用户名；同一页面「Create new private key」能申请 `ZOTERO_KEY`。*
 
 周报专用的几个（`RECIPIENTS`、`EMBEDDING_API_KEY`、`NCBI_API_KEY`、`CONTACT_EMAIL`）以及完整的 `CUSTOM_CONFIG` 样例，[`docs/cmc-weekly-setup.md`](docs/cmc-weekly-setup.md) 第 1、2 节有可以直接复制的版本和踩坑记录，这里不重复。
 
@@ -322,6 +344,61 @@ uv run pytest --cov=src/zotero_arxiv_daily --cov-report=term-missing
 **加一个新的 reranker**：继承 `BaseReranker`，实现相似度计算，用 `@register_reranker("你的名字")` 装饰，在 `reranker/__init__.py` 里 import。`executor.reranker` 这一个键日报和周报共用，选哪个两条管线都受影响。
 
 **给报告加一个新字段**：直接改 `config/base.yaml` 的 `report.fields`，加一项 `key`/`label`/`kind`/`instruction`（`kind: list` 时再加 `max_items`）。不需要碰代码——抽取提示词和三个渲染器（markdown / 网页 HTML / 邮件 HTML）都是从这份列表动态生成的。`instruction` 里必须带一个形如「120–180 字」的字数区间，`tests/test_setup_doc.py` 里有一条守卫测试会在漏写字数区间时失败。
+
+## 13. 项目结构
+
+`src/zotero_arxiv_daily/` 下按「日报专用 / 周报专用 / 两条共用」大致分区；标了「日报」「周报」的文件只服务对应管线，没标的两条都用。子目录对应第 3 节表格里的三套插件式注册表。
+
+```
+src/zotero_arxiv_daily/
+├── main.py                日报管线入口（@hydra.main）
+├── weekly.py               周报管线入口，WeeklyExecutor 编排全部 9 个阶段
+├── monthly.py              月度综述入口，独立运行，可选
+├── preflight.py            预检入口，跑之前探测每个外部依赖（见第 9 节）
+├── executor.py             Executor 基类：拉取/过滤 Zotero 语料，日报检索编排
+├── protocol.py             Paper / CorpusPaper 数据类；Paper 挂 LLM 方法（生成 TLDR、提取单位）
+├── construct_email.py      日报的邮件 HTML 渲染（上游遗留；周报的渲染在 report.py/mailer.py）
+├── utils.py                共享工具（glob 匹配、prompt 截断等）
+│
+├── retriever/                     检索器插件：@register_retriever（日报）/ @register_query_retriever（周报）
+│   ├── base.py                      日报检索器基类：_retrieve_raw_papers() / convert_to_paper()
+│   ├── arxiv_retriever.py           arXiv（日报）
+│   ├── biorxiv_retriever.py         bioRxiv（日报）
+│   ├── medrxiv_retriever.py         medRxiv（日报）
+│   ├── chemrxiv_retriever.py        chemRxiv，经 Crossref（日报）
+│   ├── query_base.py                周报检索器基类：接受一条检索式 + 起止日期
+│   ├── pubmed_retriever.py          PubMed E-utilities（周报）
+│   ├── europepmc_retriever.py       Europe PMC（周报）
+│   ├── crossref_retriever.py        Crossref（周报）
+│   └── openalex_retriever.py        OpenAlex；兼职经典补位来源（周报）
+│
+├── reranker/                      相似度插件：@register_reranker，两条管线共用
+│   ├── base.py                      BaseReranker：similarity_matrix / get_similarity_score / 时间衰减权重
+│   ├── local.py                     sentence-transformers 本地模型
+│   ├── api.py                       OpenAI 兼容 embedding API
+│   └── vector_cache.py              跨周缓存语料 embedding（周报）
+│
+├── search/                        周报专用：把 Zotero 语料变成检索目标
+│   ├── cluster.py                   LLM 把语料聚成主题簇；候选归簇（语料均值 + 簇描述相似度加权，见第 3 节）
+│   └── profile.py                   每个主题蒸馏出三种检索式（PubMed 布尔式 / Crossref 自然语言 / OR 词表）
+│
+├── fulltext/
+│   └── resolver.py                开放获取全文阶梯式抓取；PDF 命名为「年份-作者-标题-哈希」（周报）
+│
+├── dedup.py                DOI 归一化、跨源去重、跨周去重（`state/seen_dois.json`，周报）
+├── triage.py                LLM 判定候选与生物药 CMC 的相关度，0–100 分（周报）
+├── scoring.py               相关度 + 期刊/企业加分 → 综合分；双闸门判定（周报）
+├── affiliation.py           从检索源元数据提取作者单位，匹配期刊/企业名单（周报）
+├── quota.py                 按主题 sqrt 配额分配名额（周报）
+├── backfill.py               不足 `min_papers` 时用 OpenAlex 高被引论文补位（周报）
+├── extract.py                按 `report.fields` 配置抽取结构化字段（周报）
+├── report.py                 渲染三种产物：markdown / 网页 HTML（侧栏目录+编号）/ 邮件 HTML（周报）
+├── mailer.py                 多收件人（Bcc）投递 + 附件大小预算（周报）
+├── publish.py                 把产物写盘、commit、push 回仓库（周报/月度）
+└── weeknum.py                周编号与产物路径命名，如 `2026-08-W3`（周报）
+```
+
+配置文件在 `config/`（`base.yaml`/`custom.yaml`/`default.yaml`，见第 6、7 节）；产物落在 `reports/`、`library/`、`state/`（见第 10 节）；测试在 `tests/`，目录结构与 `src/` 一一对应；`docs/` 下是设计文档和部署实测记录（`cmc-literature-weekly-plan.md`、`cmc-weekly-setup.md`）；开发历史见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ---
 
