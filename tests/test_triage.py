@@ -141,3 +141,84 @@ def test_the_prompt_carries_the_paper_title_and_abstract():
     prompt = str(calls[0]["messages"])
     assert "Cetuximab ADC" in prompt
     assert "Abstract of Cetuximab ADC." in prompt
+
+
+# --------------------------------------------------------------------------- theme-fit verdicts
+#
+# Relevance answers "is this CMC-adjacent at all"; these cover the stricter,
+# separate question of whether a paper fits one of the library's actual
+# themes -- the check that catches a paper which clears the relevance bar
+# but was forced under a theme its embedding merely scored highest on.
+
+THEMES = {"HCP": "宿主细胞蛋白检测", "电荷": "电荷变异体分析"}
+
+
+def test_theme_names_and_descriptions_appear_in_the_prompt_when_given():
+    calls: list = []
+    triage_papers([make_paper("A")], stub_client([payload()], recorder=calls), LLM_PARAMS, themes=THEMES)
+    prompt = str(calls[0]["messages"])
+    assert "HCP" in prompt and "宿主细胞蛋白检测" in prompt
+    assert "电荷" in prompt and "电荷变异体分析" in prompt
+
+
+def test_without_themes_the_prompt_asks_for_no_cluster_field():
+    calls: list = []
+    triage_papers([make_paper("A")], stub_client([payload()], recorder=calls), LLM_PARAMS)
+    prompt = str(calls[0]["messages"])
+    assert '"cluster"' not in prompt
+
+
+def test_an_empty_themes_dict_behaves_like_no_themes():
+    calls: list = []
+    triage_papers([make_paper("A")], stub_client([payload()], recorder=calls), LLM_PARAMS, themes={})
+    prompt = str(calls[0]["messages"])
+    assert '"cluster"' not in prompt
+
+
+def test_a_row_naming_a_real_theme_overrides_the_papers_cluster():
+    paper = make_paper("A")
+    paper.cluster = "电荷"  # the provisional, embedding-based assignment
+    row = {"index": 1, "relevance": 88, "reason": "r", "modalities": [], "cluster": "HCP"}
+    triage_papers([paper], stub_client([payload(row)]), LLM_PARAMS, themes=THEMES)
+    assert paper.triage.relevance == 88
+    assert paper.cluster == "HCP"
+
+
+def test_a_row_saying_no_theme_fits_rejects_the_paper_despite_high_relevance():
+    paper = make_paper("A")
+    paper.cluster = "HCP"
+    row = {"index": 1, "relevance": 88, "reason": "写得很好但跑题了", "modalities": [], "cluster": "无"}
+    triage_papers([paper], stub_client([payload(row)]), LLM_PARAMS, themes=THEMES)
+    assert paper.triage is None
+
+
+def test_an_unrecognized_cluster_value_leaves_the_assignment_untouched():
+    """A name the model invented must not silently relabel the paper."""
+    paper = make_paper("A")
+    paper.cluster = "HCP"
+    row = {"index": 1, "relevance": 70, "reason": "r", "modalities": [], "cluster": "一个模型编的主题名"}
+    triage_papers([paper], stub_client([payload(row)]), LLM_PARAMS, themes=THEMES)
+    assert paper.triage.relevance == 70
+    assert paper.triage.cluster is None
+    assert paper.cluster == "HCP"
+
+
+def test_a_missing_cluster_field_leaves_the_assignment_untouched():
+    paper = make_paper("A")
+    paper.cluster = "HCP"
+    row = {"index": 1, "relevance": 70, "reason": "r"}
+    triage_papers([paper], stub_client([payload(row)]), LLM_PARAMS, themes=THEMES)
+    assert paper.cluster == "HCP"
+
+
+def test_theme_verdicts_are_matched_by_index_not_by_order():
+    fits = make_paper("fits HCP")
+    fits.cluster = "电荷"
+    rejected = make_paper("fits nothing")
+    rejected.cluster = "HCP"
+    row1 = {"index": 1, "relevance": 80, "reason": "r", "cluster": "HCP"}
+    row2 = {"index": 2, "relevance": 80, "reason": "r", "cluster": "无"}
+    # Rows arrive out of order; index, not position, must decide who gets what.
+    triage_papers([fits, rejected], stub_client([payload(row2, row1)]), LLM_PARAMS, themes=THEMES)
+    assert fits.cluster == "HCP"
+    assert rejected.triage is None

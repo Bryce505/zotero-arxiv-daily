@@ -83,7 +83,11 @@ def stubbed(monkeypatch, weekly_config):
     """Stub every network boundary the weekly run touches."""
     # A number, or one number per candidate.  Tests dial this instead of
     # replacing the stub, which also feeds clustering and profile distillation.
-    state = {"sent": [], "committed": [], "pushed": False, "relevance": 90}
+    # cluster_verdict is the theme-fit string ("电荷", "HCP", "无", ...), or one
+    # per candidate; None (the default) omits the "cluster" key entirely, which
+    # leaves _apply_theme_verdicts() a no-op and keeps every test that doesn't
+    # care about theme-fit behaving exactly as before that check existed.
+    state = {"sent": [], "committed": [], "pushed": False, "relevance": 90, "cluster_verdict": None}
 
     monkeypatch.setattr(
         "zotero_arxiv_daily.weekly.WeeklyExecutor.fetch_zotero_corpus",
@@ -106,15 +110,18 @@ def stubbed(monkeypatch, weekly_config):
         if '"relevance"' in request:
             count = int(re.search(r"共 (\d+) 篇", request).group(1))
             setting = state["relevance"]
-            rows = [
-                {
+            verdict = state["cluster_verdict"]
+            rows = []
+            for i in range(1, count + 1):
+                row = {
                     "index": i,
                     "relevance": setting[i - 1] if isinstance(setting, list) else setting,
                     "reason": f"理由 {i}",
                     "modalities": ["ADC"],
                 }
-                for i in range(1, count + 1)
-            ]
+                if verdict is not None:
+                    row["cluster"] = verdict[i - 1] if isinstance(verdict, list) else verdict
+                rows.append(row)
             content = json.dumps(rows, ensure_ascii=False)
         else:
             try:
@@ -230,6 +237,43 @@ def test_every_candidate_is_assigned_a_cluster(weekly_config, stubbed):
     for _, papers in digest.clusters:
         for paper in papers:
             assert paper.cluster in {"电荷", "HCP"}
+
+
+def test_gate_passes_the_real_theme_names_and_descriptions_to_triage(weekly_config, stubbed, monkeypatch):
+    """_gate() must hand triage the same theme list quota allocation uses —
+    built from self._clusters, set in run() right after clustering — so the
+    two stages never disagree about what the library's real themes are."""
+    from zotero_arxiv_daily.triage import triage_papers as real_triage
+
+    seen: list = []
+
+    def spy(papers, client, llm_params, batch_size=8, themes=None):
+        seen.append(themes)
+        return real_triage(papers, client, llm_params, batch_size, themes=themes)
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.triage_papers", spy)
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    # The stubbed cluster payload: {"name":"电荷",...}, {"name":"HCP",...}.
+    assert seen and seen[0] == {"电荷": "d", "HCP": "d"}
+
+
+def test_a_candidate_the_model_says_fits_no_theme_is_excluded(weekly_config, stubbed):
+    """A "无" verdict must drop a candidate even though its relevance score
+    alone would clear both gates — the theme-fit check is a separate,
+    stricter bar layered on top of general CMC relevance, not a re-run of it."""
+    stubbed["cluster_verdict"] = "无"
+    assert WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21)) is None
+    assert stubbed["sent"] == []
+
+
+def test_a_candidate_the_model_reassigns_is_filed_under_its_corrected_theme(weekly_config, stubbed):
+    """A verdict naming the *other* real theme overrides whichever cluster
+    the embedding-only pass provisionally picked."""
+    stubbed["cluster_verdict"] = "HCP"
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    delivered = [paper for _, papers in digest.clusters for paper in papers]
+    assert delivered
+    assert all(paper.cluster == "HCP" for paper in delivered)
 
 
 # --------------------------------------------------------------------------- description-weighted assignment
@@ -773,9 +817,9 @@ def test_only_the_configured_pool_size_is_triaged(weekly_config, stubbed, monkey
 
     seen: list[int] = []
 
-    def counting(papers, client, llm_params, batch_size=8):
+    def counting(papers, client, llm_params, batch_size=8, **kwargs):
         seen.append(len(papers))
-        return real_triage(papers, client, llm_params, batch_size)
+        return real_triage(papers, client, llm_params, batch_size, **kwargs)
 
     monkeypatch.setattr("zotero_arxiv_daily.weekly.triage_papers", counting)
     WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))

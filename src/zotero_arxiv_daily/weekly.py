@@ -82,6 +82,9 @@ class WeeklyExecutor(Executor):
         self.ignore_path_patterns = normalize_path_patterns(config.zotero.ignore_path, "ignore_path")
         self.openai_client = OpenAI(api_key=config.llm.api.key, base_url=config.llm.api.base_url)
         self.reranker = get_reranker_cls(config.executor.reranker)(config)
+        # Populated by run(); read by _gate(). Defaulted here so _gate() never
+        # AttributeErrors if it is ever reached before run() sets the real list.
+        self._clusters: list = []
 
     def _search_all(self, profiles, start: date, end: date):
         limit = int(self.config.search.per_cluster_limit)
@@ -162,14 +165,27 @@ class WeeklyExecutor(Executor):
             return None
 
     def _gate(self, papers):
-        """Triage, score, and keep only what clears both thresholds."""
+        """Triage, score, and keep only what clears both thresholds.
+
+        ``themes`` gives triage the real theme names and descriptions to
+        validate ``paper.cluster`` against, so a candidate that is generally
+        CMC-relevant but does not fit any theme the library actually holds
+        gets excluded rather than forced under whichever theme's embedding
+        similarity happened to be highest. Populated from ``self._clusters``,
+        the same list quota allocation uses, so the two never disagree about
+        what the real themes are. Read defensively: this method is also
+        reachable, via the ``gate`` callback passed to backfill_papers, from
+        any caller that might not have gone through run() first.
+        """
         if not papers:
             return []
+        themes = {c.name: c.description for c in getattr(self, "_clusters", []) if c.members}
         triage_papers(
             papers,
             self.openai_client,
             self.config.llm,
             int(self.config.report.get("triage_batch", 8)),
+            themes=themes,
         )
         score_papers(papers, self.config)
         return passing_papers(papers, self.config)
@@ -195,6 +211,9 @@ class WeeklyExecutor(Executor):
             self.config.llm,
             int(self.config.search.n_clusters),
         )
+        # Read by _gate() to validate/correct candidate cluster assignment
+        # against the same theme list quota allocation below uses.
+        self._clusters = clusters
         profiles = load_or_build_profiles(
             os.path.join(root, profile_cache_rel),
             clusters,

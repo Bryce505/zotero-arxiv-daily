@@ -27,6 +27,7 @@ from .utils import truncate_for_prompt
 _JSON_ARRAY_RE = re.compile(r"\[.*\]", flags=re.DOTALL)
 _MAX_ABSTRACT_TOKENS = 400
 _BATCH_ATTEMPTS = 2
+_NO_THEME = "无"
 
 _RUBRIC = """你是一位生物制药 CMC 分析领域的资深专家。请判断每篇文献与「生物药 CMC 分析」的相关程度。
 
@@ -50,23 +51,73 @@ modalities 只填上面列出的生物药类型，没有就填空数组。"""
 _OUTPUT_SPEC = """只输出 JSON 数组，每篇一项，键名完全一致：
 [{"index": 1, "relevance": 0-100 的整数, "reason": "一句话", "modalities": ["ADC"]}]"""
 
+# Appended only when the caller passes ``themes``. Relevance answers "is this
+# paper CMC-adjacent at all"; cluster fit is a stricter, separate question —
+# "does it actually belong to one of the topics this library really has" —
+# and the two must not be conflated. Without this, a paper that is genuinely
+# CMC-relevant but about a topic the library has no theme for (antibody
+# engineering when the only themes are HCP/charge-heterogeneity/...) clears
+# the relevance bar and then gets forced under whichever theme's embedding
+# happened to score it highest, which is how the digest shipped an infliximab
+# developability paper under "host cell protein analysis".
+_THEME_RUBRIC_TEMPLATE = """
+文献库当前归纳出下面这些具体主题，每个主题只覆盖库中真实存在的那部分文献：
+{listing}
+
+请再额外判断每篇文献具体属于上面哪一个主题——这比"是否与生物药 CMC 相关"更严格的判断。
+一篇文献可能整体上与生物药 CMC 分析相关（relevance 照常打分），却不属于其中任何一个具体主题：
+比如它讨论的是完全不同的技术方向或研究对象，只是恰好也用到了相近的名词或仪器。
+遇到这种情况不要因为"反正都算生物药 CMC"就勉强套进最接近的主题，cluster 请直接填 "无"。
+cluster 字段必须填上面列表中完全一致的主题名称，或者 "无"，不要自己发明新名称。"""
+
+_THEME_OUTPUT_SPEC = """只输出 JSON 数组，每篇一项，键名完全一致：
+[{"index": 1, "relevance": 0-100 的整数, "reason": "一句话", "modalities": ["ADC"], "cluster": "主题名称或无"}]"""
+
 
 @dataclass
 class TriageResult:
     relevance: int
     reason: str
     modalities: list[str] = field(default_factory=list)
+    # The LLM's verdict on which real theme (if any) this paper belongs to,
+    # only ever populated when triage_papers() was called with ``themes``.
+    # One of: a name from that dict (a confident, possibly corrected
+    # assignment), _NO_THEME (belongs to none of them), or None (the model
+    # gave no usable verdict, so the prior assignment is left alone).
+    cluster: str | None = None
 
 
-def _build_prompt(batch: list[Paper]) -> str:
+def _build_prompt(batch: list[Paper], themes: dict[str, str] | None = None) -> str:
     entries = "\n\n".join(
         f"[{i}] 标题：{paper.title}\n摘要：{truncate_for_prompt(paper.abstract or '', _MAX_ABSTRACT_TOKENS)}"
         for i, paper in enumerate(batch, 1)
     )
-    return f"{_RUBRIC}\n\n{_OUTPUT_SPEC}\n\n待判定文献（共 {len(batch)} 篇）：\n\n{entries}"
+    if not themes:
+        return f"{_RUBRIC}\n\n{_OUTPUT_SPEC}\n\n待判定文献（共 {len(batch)} 篇）：\n\n{entries}"
+    listing = "\n".join(f"- {name}：{description}" for name, description in themes.items())
+    rubric = f"{_RUBRIC}\n\n{_THEME_RUBRIC_TEMPLATE.format(listing=listing)}"
+    return f"{rubric}\n\n{_THEME_OUTPUT_SPEC}\n\n待判定文献（共 {len(batch)} 篇）：\n\n{entries}"
 
 
-def _parse_rows(content: str, count: int) -> dict[int, TriageResult]:
+def _parse_cluster(raw, themes: dict[str, str] | None) -> str | None:
+    """Resolve one row's ``cluster`` field against the known theme names.
+
+    Deliberately three-valued: an exact match to a real theme (a confident
+    verdict), the exact "无" sentinel (an explicit "belongs to none of
+    them"), or None for anything else — missing, blank, or a name the model
+    invented — which callers must treat as "no usable verdict" rather than
+    as a rejection. Guessing at a fuzzy match would risk silently routing a
+    paper under a theme the model never actually named.
+    """
+    if not themes:
+        return None
+    text = str(raw or "").strip()
+    if text == _NO_THEME:
+        return _NO_THEME
+    return text if text in themes else None
+
+
+def _parse_rows(content: str, count: int, themes: dict[str, str] | None = None) -> dict[int, TriageResult]:
     """Turn one response into {1-based index: TriageResult}; raises if unusable."""
     match = _JSON_ARRAY_RE.search(content or "")
     if match is None:
@@ -88,19 +139,22 @@ def _parse_rows(content: str, count: int) -> dict[int, TriageResult]:
             relevance=max(0, min(100, relevance)),
             reason=str(row.get("reason") or ""),
             modalities=[str(m) for m in modalities if str(m).strip()],
+            cluster=_parse_cluster(row.get("cluster"), themes),
         )
     return results
 
 
-def _triage_batch(batch: list[Paper], client, llm_params: dict) -> dict[int, TriageResult]:
+def _triage_batch(
+    batch: list[Paper], client, llm_params: dict, themes: dict[str, str] | None = None
+) -> dict[int, TriageResult]:
     response = client.chat.completions.create(
         messages=[
             {"role": "system", "content": "你只输出 JSON 数组，不输出任何解释。"},
-            {"role": "user", "content": _build_prompt(batch)},
+            {"role": "user", "content": _build_prompt(batch, themes)},
         ],
         **llm_params.get("generation_kwargs", {}),
     )
-    return _parse_rows(response.choices[0].message.content, len(batch))
+    return _parse_rows(response.choices[0].message.content, len(batch), themes)
 
 
 def _assign(batch: list[Paper], results: dict[int, TriageResult]) -> None:
@@ -108,20 +162,63 @@ def _assign(batch: list[Paper], results: dict[int, TriageResult]) -> None:
         paper.triage = results.get(index)
 
 
-def triage_papers(papers: list[Paper], client, llm_params: dict, batch_size: int = 8) -> None:
+def _apply_theme_verdicts(papers: list[Paper], themes: dict[str, str] | None) -> None:
+    """Resolve each paper's ``TriageResult.cluster`` against its provisional
+    (embedding-based) ``paper.cluster``, in place. Three outcomes:
+
+    - a real theme name: the LLM's topical read overrides the provisional
+      assignment ``assign_clusters`` made from embedding similarity alone.
+    - the "无" sentinel: relevant to biologics CMC or not, the model judged
+      this paper does not belong to any theme the library actually holds.
+      Routed through the existing "unjudged" path — nulling ``paper.triage``
+      — rather than a second gate, so it is excluded by machinery that is
+      already tested rather than by a new one that has to be kept in sync.
+    - anything else (no ``themes`` given, or no usable verdict came back):
+      leave ``paper.cluster`` exactly as it was.
+    """
+    if not themes:
+        return
+    rejected = 0
+    for paper in papers:
+        verdict = paper.triage.cluster if paper.triage else None
+        if verdict == _NO_THEME:
+            rejected += 1
+            paper.triage = None
+        elif verdict:
+            paper.cluster = verdict
+    if rejected:
+        logger.info(
+            f"{rejected} candidate(s) read as relevant to biologics CMC in general "
+            "but not judged to fit any current theme; excluded"
+        )
+
+
+def triage_papers(
+    papers: list[Paper],
+    client,
+    llm_params: dict,
+    batch_size: int = 8,
+    themes: dict[str, str] | None = None,
+) -> None:
     """Fill ``paper.triage`` for every paper; never raises.
 
     A paper left with ``triage is None`` has not been judged, and the gate
     treats that as "did not pass" rather than waving it through — letting an
     unjudged paper past would turn the gate into decoration on exactly the
     run where the LLM is misbehaving.
+
+    ``themes``, when given, maps each real theme's name to its description.
+    It both asks the model to validate/correct ``paper.cluster`` against
+    what the library's themes actually cover (see ``_apply_theme_verdicts``)
+    and, when omitted, reproduces the exact prompt and behaviour this
+    function had before that check existed.
     """
     batch_size = max(1, int(batch_size))
     batches = [papers[i:i + batch_size] for i in range(0, len(papers), batch_size)]
     for batch in tqdm(batches, desc="Triaging candidates"):
         for attempt in range(1, _BATCH_ATTEMPTS + 1):
             try:
-                _assign(batch, _triage_batch(batch, client, llm_params))
+                _assign(batch, _triage_batch(batch, client, llm_params, themes))
                 break
             except Exception as exc:  # noqa: BLE001 - a bad batch must not kill the run
                 logger.warning(f"Triage batch attempt {attempt}/{_BATCH_ATTEMPTS} failed: {exc}")
@@ -129,10 +226,12 @@ def triage_papers(papers: list[Paper], client, llm_params: dict, batch_size: int
             logger.warning(f"Falling back to one triage call per paper for {len(batch)} papers")
             for paper in batch:
                 try:
-                    paper.triage = _triage_batch([paper], client, llm_params).get(1)
+                    paper.triage = _triage_batch([paper], client, llm_params, themes).get(1)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"Triage failed for {paper.title!r}: {exc}")
                     paper.triage = None
+
+    _apply_theme_verdicts(papers, themes)
 
     unjudged = sum(1 for p in papers if p.triage is None)
     if unjudged:
