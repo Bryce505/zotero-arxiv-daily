@@ -162,7 +162,9 @@ def _assign(batch: list[Paper], results: dict[int, TriageResult]) -> None:
         paper.triage = results.get(index)
 
 
-def _apply_theme_verdicts(papers: list[Paper], themes: dict[str, str] | None) -> None:
+def _apply_theme_verdicts(
+    papers: list[Paper], themes: dict[str, str] | None, require_theme_fit: bool = True
+) -> None:
     """Resolve each paper's ``TriageResult.cluster`` against its provisional
     (embedding-based) ``paper.cluster``, in place. Three outcomes:
 
@@ -170,26 +172,48 @@ def _apply_theme_verdicts(papers: list[Paper], themes: dict[str, str] | None) ->
       assignment ``assign_clusters`` made from embedding similarity alone.
     - the "无" sentinel: relevant to biologics CMC or not, the model judged
       this paper does not belong to any theme the library actually holds.
-      Routed through the existing "unjudged" path — nulling ``paper.triage``
-      — rather than a second gate, so it is excluded by machinery that is
-      already tested rather than by a new one that has to be kept in sync.
+      Under ``require_theme_fit`` (the default, and what fresh candidates
+      get) that is a rejection, routed through the existing "unjudged" path
+      — nulling ``paper.triage`` — rather than a second gate, so it is
+      excluded by machinery that is already tested rather than by a new one
+      that has to be kept in sync.
     - anything else (no ``themes`` given, or no usable verdict came back):
       leave ``paper.cluster`` exactly as it was.
+
+    ``require_theme_fit=False`` keeps the "无" papers instead, showing them
+    under whichever theme the embedding provisionally picked. That is the
+    bar highly-cited backfill is held to: run 33517443909 rejected 13 of 13
+    backfill candidates on theme fit alone — none on relevance, none on
+    score — because "does this belong to one of the five themes this week's
+    corpus clustered into" is a stricter, different question from "is this
+    classic worth reading for this library", and a decades-old landmark
+    paper answers the second far better than the first. Loosening removes
+    only the rejection: both numeric gates still apply, so a backfill
+    candidate the model scores at 30 still never lands in the digest.
     """
     if not themes:
         return
     rejected = 0
+    kept_without_fit = 0
     for paper in papers:
         verdict = paper.triage.cluster if paper.triage else None
         if verdict == _NO_THEME:
-            rejected += 1
-            paper.triage = None
+            if require_theme_fit:
+                rejected += 1
+                paper.triage = None
+            else:
+                kept_without_fit += 1
         elif verdict:
             paper.cluster = verdict
     if rejected:
         logger.info(
             f"{rejected} candidate(s) read as relevant to biologics CMC in general "
             "but not judged to fit any current theme; excluded"
+        )
+    if kept_without_fit:
+        logger.info(
+            f"{kept_without_fit} candidate(s) kept without a theme fit "
+            "(theme fit not required for this batch)"
         )
 
 
@@ -199,6 +223,7 @@ def triage_papers(
     llm_params: dict,
     batch_size: int = 8,
     themes: dict[str, str] | None = None,
+    require_theme_fit: bool = True,
 ) -> None:
     """Fill ``paper.triage`` for every paper; never raises.
 
@@ -212,6 +237,10 @@ def triage_papers(
     what the library's themes actually cover (see ``_apply_theme_verdicts``)
     and, when omitted, reproduces the exact prompt and behaviour this
     function had before that check existed.
+
+    ``require_theme_fit=False`` keeps a paper the model judged to fit none
+    of those themes, rather than excluding it — see
+    ``_apply_theme_verdicts`` for why backfill is held to that looser bar.
     """
     batch_size = max(1, int(batch_size))
     batches = [papers[i:i + batch_size] for i in range(0, len(papers), batch_size)]
@@ -231,7 +260,7 @@ def triage_papers(
                     logger.warning(f"Triage failed for {paper.title!r}: {exc}")
                     paper.triage = None
 
-    _apply_theme_verdicts(papers, themes)
+    _apply_theme_verdicts(papers, themes, require_theme_fit)
 
     unjudged = sum(1 for p in papers if p.triage is None)
     if unjudged:

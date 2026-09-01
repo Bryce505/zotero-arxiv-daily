@@ -164,7 +164,7 @@ class WeeklyExecutor(Executor):
             logger.warning(f"Cluster-description similarity unusable ({exc}); routing by corpus mean only")
             return None
 
-    def _gate(self, papers):
+    def _gate(self, papers, require_theme_fit: bool = True):
         """Triage, score, and keep only what clears both thresholds.
 
         ``themes`` gives triage the real theme names and descriptions to
@@ -176,6 +176,15 @@ class WeeklyExecutor(Executor):
         what the real themes are. Read defensively: this method is also
         reachable, via the ``gate`` callback passed to backfill_papers, from
         any caller that might not have gone through run() first.
+
+        ``require_theme_fit=False`` is what that backfill callback passes.
+        Highly-cited classics are sourced by citation count across the whole
+        of OpenAlex, so asking them to also land inside one of the five
+        narrow themes this week's corpus clustered into rejects nearly all
+        of them: run 33517443909 dropped 13 of 13 backfill candidates on
+        theme fit alone — none on relevance, none on score — and shipped a
+        five-paper digest with no classics at all. Both numeric gates still
+        apply either way.
         """
         if not papers:
             return []
@@ -186,6 +195,7 @@ class WeeklyExecutor(Executor):
             self.config.llm,
             int(self.config.report.get("triage_batch", 8)),
             themes=themes,
+            require_theme_fit=require_theme_fit,
         )
         score_papers(papers, self.config)
         return passing_papers(papers, self.config)
@@ -261,7 +271,7 @@ class WeeklyExecutor(Executor):
                 get_query_retriever_cls("openalex")(self.config),
                 shortfall,
                 exclude | {d for d in (normalize_doi(p.doi) for p in chosen) if d},
-                gate=self._gate,
+                gate=lambda papers: self._gate(papers, require_theme_fit=False),
             )
 
         delivered = chosen + backfill

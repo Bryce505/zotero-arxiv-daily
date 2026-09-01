@@ -29,11 +29,11 @@
 - `_apply_theme_verdicts(papers, themes, require_theme_fit=True)`
 - `WeeklyExecutor._gate(papers, require_theme_fit=True)`
 
-- [ ] Step 1: 写失败的测试（放宽模式保留「无」判决、仍应用真实主题更正、默认严格不变、补位调用点传放宽）
-- [ ] Step 2: 跑测试确认失败
-- [ ] Step 3: 实现
-- [ ] Step 4: 跑测试确认通过
-- [ ] Step 5: 提交
+- [x] Step 1: 写失败的测试（放宽模式保留「无」判决、仍应用真实主题更正、默认严格不变、补位调用点传放宽）
+- [x] Step 2: 跑测试确认失败
+- [x] Step 3: 实现
+- [x] Step 4: 跑测试确认通过
+- [x] Step 5: 提交
 
 ## Task 2: 多轮补位检索
 

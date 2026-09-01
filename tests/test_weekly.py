@@ -247,9 +247,11 @@ def test_gate_passes_the_real_theme_names_and_descriptions_to_triage(weekly_conf
 
     seen: list = []
 
-    def spy(papers, client, llm_params, batch_size=8, themes=None):
+    def spy(papers, client, llm_params, batch_size=8, themes=None, require_theme_fit=True):
         seen.append(themes)
-        return real_triage(papers, client, llm_params, batch_size, themes=themes)
+        return real_triage(
+            papers, client, llm_params, batch_size, themes=themes, require_theme_fit=require_theme_fit
+        )
 
     monkeypatch.setattr("zotero_arxiv_daily.weekly.triage_papers", spy)
     WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
@@ -264,6 +266,51 @@ def test_a_candidate_the_model_says_fits_no_theme_is_excluded(weekly_config, stu
     stubbed["cluster_verdict"] = "无"
     assert WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21)) is None
     assert stubbed["sent"] == []
+
+
+def test_backfill_is_gated_without_requiring_a_theme_fit(weekly_config, stubbed, monkeypatch):
+    """Fresh candidates must fit one of the library's real themes. A
+    highly-cited classic must not be held to that same bar: run 33517443909
+    rejected 13 of 13 backfill candidates on theme fit alone, none on
+    relevance and none on score, and shipped a 5-paper digest with an empty
+    "经典补位" section."""
+    from zotero_arxiv_daily.triage import triage_papers as real_triage
+
+    strictness: list = []
+
+    def spy(papers, client, llm_params, batch_size=8, themes=None, require_theme_fit=True):
+        strictness.append(require_theme_fit)
+        return real_triage(
+            papers, client, llm_params, batch_size, themes=themes, require_theme_fit=require_theme_fit
+        )
+
+    class RetrieverWithClassics:
+        name = "pubmed"
+
+        def __init__(self, config):
+            self.config = config
+
+        def search(self, query, start, end, limit):
+            return [make_candidate(i) for i in range(3)]
+
+        def search_highly_cited(self, query, limit):
+            classic = make_candidate(90)
+            classic.doi, classic.cited_by_count = "10.1000/classic", 900
+            return [classic]
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.triage_papers", spy)
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.weekly.get_query_retriever_cls", lambda name: RetrieverWithClassics
+    )
+    # "无" everywhere: every candidate is CMC-relevant but fits no theme.
+    stubbed["cluster_verdict"] = "无"
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+
+    assert strictness[0] is True, "fresh candidates keep the strict theme-fit bar"
+    assert strictness[-1] is False, "backfill is gated without requiring a theme fit"
+    # The strict pass drops every fresh candidate; the loose one keeps the classic.
+    assert digest is not None
+    assert [p.doi for p in digest.backfill] == ["10.1000/classic"]
 
 
 def test_a_candidate_the_model_reassigns_is_filed_under_its_corrected_theme(weekly_config, stubbed):
