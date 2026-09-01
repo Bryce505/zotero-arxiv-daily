@@ -81,6 +81,16 @@ search:
   cluster_cache: state/theme_clusters.json  # Rebuilt only when the corpus changes.
   profile_cache: state/query_profiles.json  # Rebuilt only when the cluster set changes.
   seen_state: state/seen_dois.json          # DOIs already delivered, for cross-week de-duplication.
+  # —— 特定主题（可选的第二条检索线）——
+  # 库内主题是从 Zotero 语料聚出来的；这一节是你自己点名要追的方向，可以和库
+  # 内主题无关。topic 留空（默认）= 整条线不启用：不发 LLM 请求、不检索、周报
+  # 里没有这一节。相关度用的是"与这个主题相关吗"，不是全局那把生物药 CMC 尺子。
+  focus:
+    topic: ${oc.env:FOCUS_TOPIC,null}            # 要追的主题，如"连续制造在单抗原液生产中的应用"
+    background: ${oc.env:FOCUS_BACKGROUND,null}  # 可选背景，帮模型生成更贴切的检索式
+    min_papers: 3          # 少于这么多时，用该主题的高被引经典补足
+    max_papers: 8          # 这一节最多收录几篇
+    min_relevance: 60      # 与该主题的相关度下限（0-100，由 LLM 判定）
 
 fulltext:
   enabled: true            # Whether to attempt open-access full-text retrieval.

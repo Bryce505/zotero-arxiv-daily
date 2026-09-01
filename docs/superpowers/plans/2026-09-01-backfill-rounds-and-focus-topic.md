@@ -59,11 +59,11 @@
 - `triage_for_topic(papers, client, llm_params, topic, background, batch_size)`
 - `FocusResult(topic, summary, papers)`
 
-- [ ] Step 1: 写失败的测试（空 topic 零调用、profile 构建与降级、主题分诊与阈值、兜底补足、上限截断）
-- [ ] Step 2: 跑测试确认失败
-- [ ] Step 3: 实现
-- [ ] Step 4: 跑测试确认通过
-- [ ] Step 5: 提交
+- [x] Step 1: 写失败的测试（空 topic 零调用、profile 构建与降级、主题分诊与阈值、兜底补足、上限截断）
+- [x] Step 2: 跑测试确认失败
+- [x] Step 3: 实现
+- [x] Step 4: 跑测试确认通过
+- [x] Step 5: 提交
 
 ## Task 4: 渲染与编排接入
 

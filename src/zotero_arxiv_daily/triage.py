@@ -217,6 +217,96 @@ def _apply_theme_verdicts(
         )
 
 
+def _fill(papers: list[Paper], batch_size: int, judge, description: str) -> None:
+    """Run *judge* over *papers* in batches, filling ``paper.triage``.
+
+    The degradation ladder both rubrics share: retry the batch once, then
+    fall back to one call per paper, then leave the paper unjudged. Nothing
+    here raises — a paper with ``triage is None`` is treated as "did not
+    pass" downstream, which is the safe reading on a run where the model is
+    misbehaving.
+    """
+    batch_size = max(1, int(batch_size))
+    batches = [papers[i:i + batch_size] for i in range(0, len(papers), batch_size)]
+    for batch in tqdm(batches, desc=description):
+        for attempt in range(1, _BATCH_ATTEMPTS + 1):
+            try:
+                _assign(batch, judge(batch))
+                break
+            except Exception as exc:  # noqa: BLE001 - a bad batch must not kill the run
+                logger.warning(f"Triage batch attempt {attempt}/{_BATCH_ATTEMPTS} failed: {exc}")
+        else:
+            logger.warning(f"Falling back to one triage call per paper for {len(batch)} papers")
+            for paper in batch:
+                try:
+                    paper.triage = judge([paper]).get(1)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Triage failed for {paper.title!r}: {exc}")
+                    paper.triage = None
+
+
+_TOPIC_RUBRIC_TEMPLATE = """你是一位科研文献筛选专家。用户指定了一个自己关注的主题，请判断每篇文献与**这个主题**的相关程度。
+
+用户关注的主题：{topic}
+{background}
+评分标准：
+- 80-100：文献的研究对象或方法学正是该主题所指的内容。
+- 60-79：文献处理的是该主题的邻近问题，读了对该主题有直接帮助。
+- 30-59：只在名词或领域上沾边，对该主题帮助有限。
+- 0-29：与该主题无关。
+
+只按用户给的主题判断，不要替换成你认为更重要的主题，也不要因为文献本身质量高就抬分。
+reason 用一句话说清「对这个主题有什么用」或「为什么无关」，不超过 40 字。"""
+
+_TOPIC_OUTPUT_SPEC = """只输出 JSON 数组，每篇一项，键名完全一致：
+[{"index": 1, "relevance": 0-100 的整数, "reason": "一句话"}]"""
+
+
+def _topic_prompt(batch: list[Paper], topic: str, background: str) -> str:
+    entries = "\n\n".join(
+        f"[{i}] 标题：{paper.title}\n摘要：{truncate_for_prompt(paper.abstract or '', _MAX_ABSTRACT_TOKENS)}"
+        for i, paper in enumerate(batch, 1)
+    )
+    context = f"用户补充的背景：{background}\n" if background else ""
+    rubric = _TOPIC_RUBRIC_TEMPLATE.format(topic=topic, background=context)
+    return f"{rubric}\n\n{_TOPIC_OUTPUT_SPEC}\n\n待判定文献（共 {len(batch)} 篇）：\n\n{entries}"
+
+
+def triage_for_topic(
+    papers: list[Paper],
+    client,
+    llm_params: dict,
+    topic: str,
+    background: str = "",
+    batch_size: int = 8,
+) -> None:
+    """Judge each paper against the *user's* topic; never raises.
+
+    Deliberately a separate rubric from the biologics-CMC one. The focus
+    topic is whatever the operator asked for, and can sit entirely outside
+    biologics CMC — scoring it against the CMC rubric would file the very
+    papers they asked for in the 20-54 "only the nouns overlap" band and
+    drop all of them, which would make the feature pointless.
+    """
+    if not papers or not str(topic or "").strip():
+        return
+    _fill(
+        papers,
+        batch_size,
+        lambda batch: _parse_rows(
+            client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "你只输出 JSON 数组，不输出任何解释。"},
+                    {"role": "user", "content": _topic_prompt(batch, topic, background)},
+                ],
+                **llm_params.get("generation_kwargs", {}),
+            ).choices[0].message.content,
+            len(batch),
+        ),
+        f"Triaging for {topic}",
+    )
+
+
 def triage_papers(
     papers: list[Paper],
     client,
@@ -242,23 +332,7 @@ def triage_papers(
     of those themes, rather than excluding it — see
     ``_apply_theme_verdicts`` for why backfill is held to that looser bar.
     """
-    batch_size = max(1, int(batch_size))
-    batches = [papers[i:i + batch_size] for i in range(0, len(papers), batch_size)]
-    for batch in tqdm(batches, desc="Triaging candidates"):
-        for attempt in range(1, _BATCH_ATTEMPTS + 1):
-            try:
-                _assign(batch, _triage_batch(batch, client, llm_params, themes))
-                break
-            except Exception as exc:  # noqa: BLE001 - a bad batch must not kill the run
-                logger.warning(f"Triage batch attempt {attempt}/{_BATCH_ATTEMPTS} failed: {exc}")
-        else:
-            logger.warning(f"Falling back to one triage call per paper for {len(batch)} papers")
-            for paper in batch:
-                try:
-                    paper.triage = _triage_batch([paper], client, llm_params, themes).get(1)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(f"Triage failed for {paper.title!r}: {exc}")
-                    paper.triage = None
+    _fill(papers, batch_size, lambda batch: _triage_batch(batch, client, llm_params, themes), "Triaging candidates")
 
     _apply_theme_verdicts(papers, themes, require_theme_fit)
 
