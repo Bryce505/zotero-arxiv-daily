@@ -287,14 +287,18 @@ class WeeklyExecutor(Executor):
         # that topic rather than against biologics CMC. Off unless configured;
         # excludes what this week already picked so the same paper cannot
         # appear twice in one digest.
-        focus = collect_focus_papers(
-            self.config,
-            self.openai_client,
-            lambda source: get_query_retriever_cls(source)(self.config),
-            start,
-            end,
-            exclude | {d for d in (normalize_doi(p.doi) for p in chosen + backfill) if d},
-        )
+        try:
+            focus = collect_focus_papers(
+                self.config,
+                self.openai_client,
+                lambda source: get_query_retriever_cls(source)(self.config),
+                start,
+                end,
+                exclude | {d for d in (normalize_doi(p.doi) for p in chosen + backfill) if d},
+            )
+        except Exception as exc:  # noqa: BLE001 - an optional section must never cost the digest
+            logger.warning(f"Focus topic search failed ({exc}); delivering the digest without it")
+            focus = None
         focus_papers = list(focus.papers) if focus else []
 
         delivered = chosen + backfill + focus_papers

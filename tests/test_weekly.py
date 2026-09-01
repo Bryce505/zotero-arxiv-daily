@@ -372,6 +372,21 @@ def test_focus_papers_are_extracted_and_recorded_like_any_other(weekly_config, s
         assert "10.1000/77" in json.load(handle)
 
 
+def test_a_broken_focus_line_does_not_cost_the_digest(weekly_config, stubbed, monkeypatch):
+    """The house rule the whole pipeline is built on: one component failing
+    must not take the run with it. The focus line is an optional extra, so
+    it least of all — losing a section beats losing the week's email."""
+    def boom(*args, **kwargs):
+        raise RuntimeError("focus search exploded")
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.collect_focus_papers", boom)
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+
+    assert digest is not None
+    assert digest.focus is None
+    assert stubbed["sent"], "the digest still goes out without its focus section"
+
+
 # --------------------------------------------------------------------------- description-weighted assignment
 
 def _minimal_executor(config, reranker):
