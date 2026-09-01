@@ -419,3 +419,75 @@ def test_cluster_display_order_uses_the_composite_score_not_raw_similarity():
     )
     digest = build_digest([high_similarity, high_rank], [], date(2026, 8, 21), top_n=2)
     assert [name for name, _ in digest.clusters] == ["zzz-cluster", "aaa-cluster"]
+
+
+# --------------------------------------------------------------------------- focus topic section
+
+
+def focus_digest(**kw):
+    from zotero_arxiv_daily.search.focus import FocusResult
+
+    focus = FocusResult(
+        topic="连续制造",
+        summary="连续制造在单抗原液生产中的工艺控制。",
+        papers=[make_paper("perfusion", "连续制造", 5.0), make_paper("scaleup", "连续制造", 4.0, oa_status="closed")],
+    )
+    papers = [make_paper("alpha", "电荷异质性", 9.0)]
+    backfill = [make_paper("classic", "电荷异质性", 6.0, is_backfill=True, cited_by_count=900)]
+    return build_digest(papers, backfill, date(2026, 8, 21), top_n=2, focus=focus, **kw)
+
+
+def test_focus_papers_count_towards_the_total():
+    assert focus_digest().total == 4  # 1 fresh + 1 backfill + 2 focus
+
+
+def test_focus_papers_stay_out_of_the_top_picks():
+    """Top picks rank by CMC relevance; the focus section ranks by relevance
+    to the operator's own topic. Mixing them would make one badge number mean
+    two different things in the same report."""
+    assert [p.title for p in focus_digest().top_picks] == ["alpha"]
+
+
+def test_focus_papers_stay_out_of_the_cluster_sections():
+    digest = focus_digest()
+    assert [p.title for _, papers in digest.clusters for p in papers] == ["alpha"]
+
+
+def test_markdown_renders_the_focus_topic_with_its_summary():
+    text = render_markdown(focus_digest(), FIELDS)
+    assert "## 特定主题：连续制造（2 篇）" in text
+    assert "> 连续制造在单抗原液生产中的工艺控制。" in text
+    assert "### perfusion" in text
+    assert "perfusion 背景" in text  # same entry format as any other theme
+
+
+def test_web_html_renders_the_focus_topic_section():
+    html = render_web_html(focus_digest(), FIELDS)
+    assert "特定主题：连续制造" in html
+    assert "连续制造在单抗原液生产中的工艺控制。" in html
+    assert ">perfusion</a>" in html
+
+
+def test_web_html_numbers_and_links_the_focus_papers():
+    html = render_web_html(focus_digest(), FIELDS)
+    # Reading order: top pick alpha (#1), then the cluster card, then focus.
+    assert 'id="p-2"' in html and 'href="#p-2"' in html
+    assert '<div class="toc-section">特定主题：连续制造</div>' in html
+
+
+def test_email_html_renders_the_focus_topic_section():
+    html = render_email_html(focus_digest(), FIELDS)
+    assert "特定主题：连续制造" in html
+    assert "perfusion" in html
+
+
+def test_a_paywalled_focus_paper_is_listed_for_manual_retrieval():
+    assert "scaleup" in [p.title for p in focus_digest().needs_manual]
+
+
+def test_nothing_focus_related_renders_without_a_focus_result():
+    digest = sample_digest()
+    assert digest.focus is None
+    for text in (render_markdown(digest, FIELDS), render_web_html(digest, FIELDS),
+                 render_email_html(digest, FIELDS)):
+        assert "特定主题" not in text

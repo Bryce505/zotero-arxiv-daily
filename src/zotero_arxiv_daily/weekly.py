@@ -39,6 +39,7 @@ from zotero_arxiv_daily.reranker.vector_cache import cached_similarity_matrix
 from zotero_arxiv_daily.retriever import get_query_retriever_cls
 from zotero_arxiv_daily.scoring import passing_papers, score_papers
 from zotero_arxiv_daily.search.cluster import assign_clusters, load_or_build_clusters
+from zotero_arxiv_daily.search.focus import collect_focus_papers
 from zotero_arxiv_daily.search.profile import (
     alternate_queries,
     load_or_build_profiles,
@@ -72,6 +73,7 @@ def attachment_candidates(digest, limit: int) -> list[str]:
     ordered.extend(sorted(rest, key=lambda p: -(p.score or 0.0)))
     # A thin week is mostly backfill; attaching nothing would be perverse.
     ordered.extend(p for p in digest.backfill if id(p) not in seen)
+    ordered.extend(p for p in digest.focus_papers if id(p) not in seen)
     return [p.pdf_path for p in ordered if p.pdf_path][:limit]
 
 
@@ -281,7 +283,21 @@ class WeeklyExecutor(Executor):
                 ),
             )
 
-        delivered = chosen + backfill
+        # The operator's own topic, searched separately and judged against
+        # that topic rather than against biologics CMC. Off unless configured;
+        # excludes what this week already picked so the same paper cannot
+        # appear twice in one digest.
+        focus = collect_focus_papers(
+            self.config,
+            self.openai_client,
+            lambda source: get_query_retriever_cls(source)(self.config),
+            start,
+            end,
+            exclude | {d for d in (normalize_doi(p.doi) for p in chosen + backfill) if d},
+        )
+        focus_papers = list(focus.papers) if focus else []
+
+        delivered = chosen + backfill + focus_papers
         if not delivered:
             logger.warning("No papers to deliver this week")
             return None
@@ -304,7 +320,9 @@ class WeeklyExecutor(Executor):
         fields = load_field_specs(self.config)
         extract_all(delivered, self.openai_client, self.config.llm, fields)
 
-        digest = build_digest(chosen, backfill, anchor, int(self.config.report.top_picks))
+        digest = build_digest(
+            chosen, backfill, anchor, int(self.config.report.top_picks), focus=focus
+        )
         md_rel, html_rel = report_paths(anchor)
         md_path = write_text(os.path.join(root, md_rel), render_markdown(digest, fields))
         html_path = write_text(os.path.join(root, html_rel), render_web_html(digest, fields))

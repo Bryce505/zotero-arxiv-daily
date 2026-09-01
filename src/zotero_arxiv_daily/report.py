@@ -13,6 +13,7 @@ from html import escape
 
 from .extract import FieldSpec, ListItem
 from .protocol import Paper
+from .search.focus import FocusResult
 from .weeknum import week_label, week_window
 
 EMAIL_MAX_BYTES = 102_000
@@ -28,10 +29,22 @@ class Digest:
     backfill: list[Paper] = field(default_factory=list)
     top_picks: list[Paper] = field(default_factory=list)
     needs_manual: list[Paper] = field(default_factory=list)
+    # The operator's own topic, when one is configured. Rendered as its own
+    # section rather than folded into the library's themes: it is a different
+    # question, answered by a different relevance rubric.
+    focus: FocusResult | None = None
+
+    @property
+    def focus_papers(self) -> list[Paper]:
+        return list(self.focus.papers) if self.focus else []
 
     @property
     def total(self) -> int:
-        return sum(len(papers) for _, papers in self.clusters) + len(self.backfill)
+        return (
+            sum(len(papers) for _, papers in self.clusters)
+            + len(self.backfill)
+            + len(self.focus_papers)
+        )
 
 
 def _rank_key(paper: Paper) -> float:
@@ -44,7 +57,13 @@ def _rank_key(paper: Paper) -> float:
     return paper.score or 0.0
 
 
-def build_digest(papers: list[Paper], backfill: list[Paper], anchor: date, top_n: int = 3) -> Digest:
+def build_digest(
+    papers: list[Paper],
+    backfill: list[Paper],
+    anchor: date,
+    top_n: int = 3,
+    focus: FocusResult | None = None,
+) -> Digest:
     """Group *papers* into the shape the renderers consume."""
     start, end = week_window(anchor)
     fresh = [p for p in papers if not p.is_backfill]
@@ -56,6 +75,7 @@ def build_digest(papers: list[Paper], backfill: list[Paper], anchor: date, top_n
         bucket.sort(key=lambda p: -_rank_key(p))
 
     ordered = sorted(grouped.items(), key=lambda kv: (-max(_rank_key(p) for p in kv[1]), kv[0]))
+    focus_papers = list(focus.papers) if focus else []
 
     return Digest(
         label=week_label(anchor),
@@ -63,10 +83,17 @@ def build_digest(papers: list[Paper], backfill: list[Paper], anchor: date, top_n
         end=end,
         clusters=ordered,
         backfill=sorted(backfill, key=lambda p: -(p.cited_by_count or 0)),
+        # Focus papers are deliberately not eligible: their relevance was
+        # measured against the operator's topic, not against biologics CMC,
+        # so ranking them next to cluster papers would make one badge number
+        # mean two different things in the same report.
         top_picks=sorted(fresh, key=lambda p: -_rank_key(p))[:top_n],
-        # Backfill included: a thin week is mostly backfill, which is exactly
-        # when the manual-retrieval list matters.
-        needs_manual=[p for p in fresh + list(backfill) if p.oa_status != "open"],
+        # Backfill and focus included: a thin week is mostly backfill, which is
+        # exactly when the manual-retrieval list matters.
+        needs_manual=[
+            p for p in fresh + list(backfill) + focus_papers if p.oa_status != "open"
+        ],
+        focus=focus,
     )
 
 
@@ -156,6 +183,13 @@ def render_markdown(digest: Digest, fields: list[FieldSpec]) -> str:
         for paper in papers:
             lines += _markdown_entry(paper, fields)
 
+    if digest.focus and digest.focus.papers:
+        lines += [f"## 特定主题：{digest.focus.topic}（{len(digest.focus.papers)} 篇）", ""]
+        if digest.focus.summary:
+            lines += [f"> {digest.focus.summary}", ""]
+        for paper in digest.focus.papers:
+            lines += _markdown_entry(paper, fields)
+
     if digest.backfill:
         lines += ["## 经典补位", "", "> 本周新文献不足，以下为依据文献库检索到的高引经典文献。", ""]
         for paper in digest.backfill:
@@ -224,8 +258,11 @@ def _number_papers(digest: Digest) -> dict[int, int]:
     """
     numbers: dict[int, int] = {}
     n = 1
-    for paper in list(digest.top_picks) + [p for _, papers in digest.clusters for p in papers] + list(
-        digest.backfill
+    for paper in (
+        list(digest.top_picks)
+        + [p for _, papers in digest.clusters for p in papers]
+        + digest.focus_papers
+        + list(digest.backfill)
     ):
         if id(paper) not in numbers:
             numbers[id(paper)] = n
@@ -244,6 +281,8 @@ def _toc_html(digest: Digest, numbers: dict[int, int]) -> str:
     if digest.top_picks:
         sections.append(("本周优先读", list(digest.top_picks)))
     sections.extend(digest.clusters)
+    if digest.focus and digest.focus.papers:
+        sections.append((f"特定主题：{digest.focus.topic}", list(digest.focus.papers)))
     if digest.backfill:
         sections.append(("经典补位", list(digest.backfill)))
     if not any(papers for _, papers in sections):
@@ -331,6 +370,15 @@ def render_web_html(digest: Digest, fields: list[FieldSpec]) -> str:
     for name, papers in digest.clusters:
         parts.append(f'<h2>{escape(name)}<span class="pill">{len(papers)} 篇</span></h2>')
         parts.extend(_html_card(p, fields, numbers) for p in papers)
+
+    if digest.focus and digest.focus.papers:
+        parts.append(
+            f'<h2>特定主题：{escape(digest.focus.topic)}'
+            f'<span class="pill">{len(digest.focus.papers)} 篇</span></h2>'
+        )
+        if digest.focus.summary:
+            parts.append(f'<p class="meta">{escape(digest.focus.summary)}</p>')
+        parts.extend(_html_card(p, fields, numbers) for p in digest.focus.papers)
 
     if digest.backfill:
         parts.append(
@@ -433,6 +481,17 @@ def render_email_html(digest: Digest, fields: list[FieldSpec], max_bytes: int = 
         blocks.append(
             _email_heading(f"{escape(name)}（{len(papers)} 篇）") + _email_list(papers)
         )
+
+    if digest.focus and digest.focus.papers:
+        heading = _email_heading(
+            f"特定主题：{escape(digest.focus.topic)}（{len(digest.focus.papers)} 篇）"
+        )
+        note = (
+            f'<p style="margin:0 0 6px;color:#5C6660;font-size:12px">{escape(digest.focus.summary)}</p>'
+            if digest.focus.summary
+            else ""
+        )
+        blocks.append(heading + note + _email_list(digest.focus.papers))
 
     if digest.backfill:
         blocks.append(_email_heading("经典补位") + _email_list(digest.backfill))

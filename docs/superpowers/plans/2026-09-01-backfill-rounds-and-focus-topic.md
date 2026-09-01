@@ -69,11 +69,11 @@
 
 **Files:** `report.py`、`weekly.py`、`tests/test_report.py`、`tests/test_weekly.py`
 
-- [ ] Step 1: 写失败的测试（三个渲染器的特定主题分区、目录/编号、total、需人工取全文、无 focus 时不渲染；weekly 端到端接入）
-- [ ] Step 2: 跑测试确认失败
-- [ ] Step 3: 实现
-- [ ] Step 4: 跑测试确认通过
-- [ ] Step 5: 提交
+- [x] Step 1: 写失败的测试（三个渲染器的特定主题分区、目录/编号、total、需人工取全文、无 focus 时不渲染；weekly 端到端接入）
+- [x] Step 2: 跑测试确认失败
+- [x] Step 3: 实现
+- [x] Step 4: 跑测试确认通过
+- [x] Step 5: 提交
 
 ## Task 5: 文档与收尾
 

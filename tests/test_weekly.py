@@ -323,6 +323,55 @@ def test_a_candidate_the_model_reassigns_is_filed_under_its_corrected_theme(week
     assert all(paper.cluster == "HCP" for paper in delivered)
 
 
+# --------------------------------------------------------------------------- focus topic
+
+
+def test_no_focus_topic_means_no_focus_work_at_all(weekly_config, stubbed):
+    """The default. An operator who did not ask for this line must not pay
+    for it — no section, and nothing extra searched or prompted."""
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert digest.focus is None
+    assert "特定主题" not in stubbed["sent"][0][1]
+
+
+def test_a_configured_focus_topic_reaches_the_digest_and_the_email(weekly_config, stubbed, monkeypatch):
+    from zotero_arxiv_daily.search.focus import FocusResult
+
+    focus = FocusResult(topic="连续制造", summary="一句话", papers=[make_candidate(77)])
+    seen: list = []
+
+    def fake_collect(config, client, retriever_for, start, end, exclude_dois=frozenset()):
+        seen.append((start, end, set(exclude_dois)))
+        return focus
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.collect_focus_papers", fake_collect)
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+
+    assert digest.focus is focus
+    assert "特定主题：连续制造" in stubbed["sent"][0][1]
+    start, end, excluded = seen[0]
+    # The same window the rest of the digest covers: the anchor Friday back six days.
+    assert (start, end) == (date(2026, 8, 14), date(2026, 8, 21))
+    assert excluded, "papers already chosen this week must not repeat in the focus section"
+
+
+def test_focus_papers_are_extracted_and_recorded_like_any_other(weekly_config, stubbed, monkeypatch):
+    """They are delivered papers: they get their fields extracted and their
+    DOIs remembered, or next week hands the reader the same paper again."""
+    from zotero_arxiv_daily.search.focus import FocusResult
+
+    paper = make_candidate(77)
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.weekly.collect_focus_papers",
+        lambda *a, **kw: FocusResult(topic="连续制造", summary="", papers=[paper]),
+    )
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+
+    assert paper.extraction, "focus papers go through the same extraction pass"
+    with open(str(weekly_config.search.seen_state), encoding="utf-8") as handle:
+        assert "10.1000/77" in json.load(handle)
+
+
 # --------------------------------------------------------------------------- description-weighted assignment
 
 def _minimal_executor(config, reranker):
