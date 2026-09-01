@@ -43,11 +43,11 @@
 - `backfill_papers(profiles, retriever, needed, exclude_dois, gate=None, requery=None, max_rounds=3)`
 - `alternate_queries(profiles, tried: dict[str, list[str]], client, llm_params) -> dict[str, str]`
 
-- [ ] Step 1: 写失败的测试（第二轮补足、轮数上限、requery 缺省=单轮、跨轮去重不重复过闸、requery 失败即停、凑够即停）
-- [ ] Step 2: 跑测试确认失败
-- [ ] Step 3: 实现
-- [ ] Step 4: 跑测试确认通过
-- [ ] Step 5: 提交
+- [x] Step 1: 写失败的测试（第二轮补足、轮数上限、requery 缺省=单轮、跨轮去重不重复过闸、requery 失败即停、凑够即停）
+- [x] Step 2: 跑测试确认失败
+- [x] Step 3: 实现
+- [x] Step 4: 跑测试确认通过
+- [x] Step 5: 提交
 
 ## Task 3: 特定主题检索
 

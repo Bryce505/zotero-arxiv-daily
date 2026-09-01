@@ -39,7 +39,11 @@ from zotero_arxiv_daily.reranker.vector_cache import cached_similarity_matrix
 from zotero_arxiv_daily.retriever import get_query_retriever_cls
 from zotero_arxiv_daily.scoring import passing_papers, score_papers
 from zotero_arxiv_daily.search.cluster import assign_clusters, load_or_build_clusters
-from zotero_arxiv_daily.search.profile import load_or_build_profiles, query_for_source
+from zotero_arxiv_daily.search.profile import (
+    alternate_queries,
+    load_or_build_profiles,
+    query_for_source,
+)
 from zotero_arxiv_daily.triage import triage_papers
 from zotero_arxiv_daily.weeknum import library_dir, report_paths, week_label, week_window
 
@@ -272,6 +276,9 @@ class WeeklyExecutor(Executor):
                 shortfall,
                 exclude | {d for d in (normalize_doi(p.doi) for p in chosen) if d},
                 gate=lambda papers: self._gate(papers, require_theme_fit=False),
+                requery=lambda profs, tried: alternate_queries(
+                    profs, tried, self.openai_client, self.config.llm
+                ),
             )
 
         delivered = chosen + backfill
