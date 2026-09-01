@@ -75,6 +75,19 @@ def test_crossref_sends_a_plain_agent_without_a_mailto(config, mock_crossref):
     assert "mailto" not in headers["User-Agent"]
 
 
+def test_crossref_select_does_not_include_the_invalid_affiliation_field(config, mock_crossref):
+    """Regression: 'affiliation' is not a top-level Crossref field — it lives
+    nested under author[].affiliation, which _to_paper() already reads.
+    Adding it to `select` is not a typo Crossref tolerates: confirmed live on
+    2026-09-01, every query that day came back 400 Bad Request and this
+    source silently contributed zero candidates for the whole run."""
+    CrossrefRetriever(config).search("SEC-MALS", date(2026, 8, 15), date(2026, 8, 21), 20)
+    _, params, _ = mock_crossref[0]
+    fields = params["select"].split(",")
+    assert "affiliation" not in fields
+    assert "author" in fields  # this is what actually carries affiliations
+
+
 def test_crossref_tolerates_a_partial_date(config, monkeypatch):
     partial = {"message": {"items": [dict(RESPONSE["message"]["items"][0], created={"date-parts": [[2026]]})]}}
     monkeypatch.setattr(

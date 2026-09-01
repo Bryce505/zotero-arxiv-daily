@@ -79,8 +79,14 @@ class CrossrefRetriever(BaseQueryRetriever):
                 f"until-created-date:{end:%Y-%m-%d},"
                 "type:journal-article"
             ),
-            # Crossref omits any field not named here, affiliation included.
-            "select": "DOI,title,abstract,author,container-title,created,affiliation",
+            # Crossref omits any field not named here. Affiliations are
+            # nested inside "author" (author[].affiliation, read below), not
+            # a field of their own — adding "affiliation" as a separate
+            # select value is not a recognised field name and made Crossref
+            # reject every request with 400 Bad Request (confirmed live,
+            # 2026-09-01: every query this source received that day failed
+            # this way, so it silently contributed zero candidates all run).
+            "select": "DOI,title,abstract,author,container-title,created",
         }
         mailto = self._setting("mailto")
         agent = "zotero-cmc-weekly/1.0"
