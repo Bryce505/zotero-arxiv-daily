@@ -75,9 +75,16 @@ def test_dedup_keeps_distinct_papers():
     assert len(dedup_papers(papers)) == 2
 
 
-def test_a_doi_bearing_paper_never_collapses_into_a_different_doi():
+def test_same_title_collapses_even_when_both_sides_carry_different_dois():
+    """A source can attach the wrong (but well-formed) DOI to an otherwise
+    correct record — title and abstract right, DOI pointing elsewhere.
+    Refusing to merge on that mismatch is how the same review
+    ("Protein persulfidation in plants...") reached a delivered digest
+    twice, once under each DOI. The first occurrence's own DOI wins."""
     papers = [make_paper(title="Same Title", doi="10.1000/a"), make_paper(title="Same Title", doi="10.1000/b")]
-    assert len(dedup_papers(papers)) == 2
+    result = dedup_papers(papers)
+    assert len(result) == 1
+    assert result[0].doi == "10.1000/a"
 
 
 def test_drop_seen_removes_papers_whose_doi_was_already_sent():
@@ -174,3 +181,47 @@ def test_the_same_collapse_works_in_the_other_order():
     merged = dedup_papers([with_doi, no_doi])
     assert len(merged) == 1
     assert merged[0].doi == "10.1016/x"
+
+
+def test_regression_persulfidation_duplicate_collapses_and_fills_the_journal_gap():
+    """2026-08-W4 test digest: 'Protein persulfidation in plants: a central
+    regulator of multiple signaling pathways' was delivered twice — once via
+    a record with the right DOI but no journal, once via a record with the
+    wrong DOI but the right journal. Both are the same review; the digest
+    must show it once, keeping the trustworthy DOI and picking up the
+    journal the first record was missing."""
+    from zotero_arxiv_daily.protocol import Paper
+
+    right_doi_no_journal = Paper(
+        source="pubmed",
+        title="Protein persulfidation in plants: a central regulator of multiple signaling pathways",
+        authors=["Yang D"],
+        abstract="a",
+        url="https://pubmed.ncbi.nlm.nih.gov/1/",
+        doi="10.1007/s00299-026-03954-y",
+        journal=None,
+    )
+    wrong_doi_right_journal = Paper(
+        source="pubmed",
+        title="Protein persulfidation in plants: a central regulator of multiple signaling pathways.",
+        authors=["Yang Di"],
+        abstract="a",
+        url="https://pubmed.ncbi.nlm.nih.gov/2/",
+        doi="10.1016/j.plaphy.2023.107900",
+        journal="Plant cell reports",
+    )
+    merged = dedup_papers([right_doi_no_journal, wrong_doi_right_journal])
+    assert len(merged) == 1
+    assert merged[0].doi == "10.1007/s00299-026-03954-y"
+    assert merged[0].journal == "Plant cell reports"
+
+
+def test_dedup_keeps_distinct_papers_that_do_not_share_a_title():
+    """The flip side of the regression above: dropping the DOI-equality
+    requirement must not turn into merging anything that merely looks
+    related — only a verbatim (post-normalisation) title match collapses."""
+    papers = [
+        make_paper(title="Charge Variant Analysis of Monoclonal Antibodies", doi="10.1000/a"),
+        make_paper(title="Charge Variant Analysis of Bispecific Antibodies", doi="10.1000/b"),
+    ]
+    assert len(dedup_papers(papers)) == 2

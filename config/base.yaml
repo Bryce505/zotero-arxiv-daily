@@ -88,8 +88,14 @@ fulltext:
   max_bytes: 20000000      # Reject any single PDF larger than this.
 
 report:
-  min_papers: 15           # Below this, top up with highly-cited backfill.
-  max_papers: 25           # Hard ceiling on the digest length.
+  # Two independent knobs, not one range: max_papers caps the fresh quota
+  # (allocate_quota), min_papers is the floor a thin week tops up towards
+  # with highly-cited backfill (spec 8.5). Backfill is best-effort — if
+  # OpenAlex has too few citable, on-theme classics to reach min_papers, the
+  # digest still ships smaller than this and a WARNING names why (see
+  # backfill_papers() / WeeklyExecutor.run()) rather than failing silently.
+  min_papers: 15           # Below this many fresh papers, top up with highly-cited backfill.
+  max_papers: 25           # Hard ceiling on the digest length (fresh papers only; quota total).
   top_picks: 3             # Size of the "read these first" section.
   min_per_cluster: 1       # Floor so a small theme is never crowded out.
   # —— 相关性闸门 ——

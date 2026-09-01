@@ -269,6 +269,18 @@ class WeeklyExecutor(Executor):
             logger.warning("No papers to deliver this week")
             return None
 
+        min_papers = int(self.config.report.min_papers)
+        if len(delivered) < min_papers:
+            # backfill_papers() already logs *why* it fell short (OpenAlex,
+            # exclude/dedup, or the relevance gate); this is the digest-level
+            # symptom, so it is visible even to someone only skimming for the
+            # final count rather than reading the full run log.
+            logger.warning(
+                f"Digest {label} delivered only {len(delivered)} papers "
+                f"({len(chosen)} fresh + {len(backfill)} backfilled), short of the "
+                f"{min_papers}-paper minimum even after backfill"
+            )
+
         pdf_rel = library_dir(anchor)
         download_fulltext(delivered, self.config, os.path.join(root, pdf_rel))
 

@@ -40,11 +40,26 @@ def backfill_papers(
             paper.is_backfill = True
         pool.extend(found)
 
+    fetched = len(pool)
     pool = [p for p in pool if (normalize_doi(p.doi) or "") not in exclude_dois]
     pool = dedup_papers(pool)
+    after_dedup = len(pool)
     if gate is not None:
         pool = gate(pool)
+    gated = len(pool)
     pool.sort(key=lambda p: p.cited_by_count or 0, reverse=True)
     chosen = pool[:needed]
-    logger.info(f"Backfilled {len(chosen)} highly-cited papers (needed {needed})")
+    if len(chosen) < needed:
+        # Silent under-fill is exactly how a thin week ships with no classic
+        # top-up and no clue why: this breaks down where the shortfall came
+        # from — OpenAlex came back short, exclude/dedup ate the pool, or the
+        # relevance gate rejected it — so it is diagnosable from the log
+        # instead of just showing up as a suspiciously small digest.
+        logger.warning(
+            f"Backfill fell short: needed {needed}, delivered {len(chosen)} "
+            f"({fetched} fetched from OpenAlex -> {after_dedup} after exclude/dedup -> "
+            f"{gated} passed the relevance gate)"
+        )
+    else:
+        logger.info(f"Backfilled {len(chosen)} highly-cited papers (needed {needed})")
     return chosen
