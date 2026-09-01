@@ -286,7 +286,8 @@ cron 是 5 个字段，从左到右分别是分钟（0–59）、小时（0–23
 | **相关度硬下限** | **仅名词/技术表面重合、真要迁移得重新开发的（20–54 分档）** | `report.min_relevance` |
 | **综合分闸门** | **相关度过了、但综合分仍不够优的** | `report.min_score`、`report.journals.bonus`、`report.industry.bonus` |
 | 主题配额 | 单个主题候选过度集中时，超出名额的部分 | `report.max_papers`、`report.min_per_cluster` |
-| 经典补位 | —（不淘汰，只补数量，补位候选同样要过闸） | `report.min_papers` |
+| 经典补位 | —（不淘汰，只补数量。补位候选同样过相关度与综合分两道闸，但**不要求**落进当周的某个具体主题；一轮补不满会换检索式再来，最多 3 轮） | `report.min_papers` |
+| 特定主题（可选） | 与你指定主题相关度不足的（这条线用的是"与该主题相关吗"，不是生物药 CMC 那把尺子） | `search.focus.*` |
 
 ### 用首期真实数据走一遍
 
@@ -308,6 +309,7 @@ cron 是 5 个字段，从左到右分别是分钟（0–59）、小时（0–23
 | --- | --- | --- |
 | 周报太杂（进了不少沾边但不该进的） | `report.min_relevance` / `report.min_score` | 调高。同时查一下是不是有覆盖全学科的大刊（如 *PLoS ONE*、*Nature Communications*）在 `report.journals.allow` 里把不太相关的稿子用加分顶了上来——从名单里单独移除即可，不影响机制 |
 | 周报太薄（总凑不满 `min_papers`，全靠补位） | `report.min_relevance` / `report.min_score` | 调低（不建议低于 55——那是分诊细则「中」档的下沿，再低就进了「低」档）；也可以调高 `report.triage_pool`，让更多候选有机会被分诊看到，而不是在嵌入排序阶段就被挡在门外 |
+| 有个方向库里还没有文献，但想开始追 | `search.focus.topic`（配合 `FOCUS_TOPIC`） | 填上这个主题；它不依赖 Zotero 语料，会单列一节，相关度按这个主题判定，与库内主题互不影响 |
 | 某个方向总是漏（比如某个主题总凑不满配额） | `report.min_per_cluster`、`search.per_cluster_limit` | 调高，给这个主题在配额分配里留保底名额、在检索阶段留更大的候选池；同时检查 `report.journals.allow` / `report.industry.names` 是不是漏收了这个方向常发的期刊或企业 |
 
 `min_relevance: 0` 且 `min_score: 0` 等价于关掉闸门，退回旧行为，便于对照排查是不是闸门本身的问题。
@@ -404,6 +406,7 @@ printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
 | `executor` | 日报为主 | `source` 选用哪些日报检索器、`reranker` 选择、`max_paper_num` 等 |
 | `search` | 周报专用 | `sources`（四个查询源）、`n_clusters`、`per_cluster_limit`、`cluster_assignment_description_weight`（候选归簇时主题描述信号的权重，见[第 5 节](#5-架构与运行流程)）、三个缓存文件路径 |
 | `fulltext` | 周报专用 | 是否尝试抓开放获取全文、`unpaywall_email`、单文件大小上限 |
+| `search.focus` | 周报可选的第二条检索线：`topic`（留空即关闭）、`background`、`min_papers`/`max_papers`/`min_relevance`。库内主题从 Zotero 语料聚出来，这一节是你自己点名要追的方向，可以与库内主题完全无关 |
 | `report` | 周报专用，**新手最常改的部分** | 数量控制（`min_papers`/`max_papers`/`top_picks`/`min_per_cluster`）、闸门（`min_relevance`/`min_score`/`triage_pool`/`triage_batch`，见[第 6 节](#6-文章是怎么选出来的)）、`journals`/`industry` 两份加分名单（见上方的列表陷阱）、`fields` 报告字段定义（见下） |
 | `git` | 周报/月度综述 | 是否把产物提交回仓库、提交用的 user.name/email |
 
@@ -434,6 +437,8 @@ printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
 | `EMBEDDING_API_KEY` | 周报（`reranker: api` 时） | 用 API embedding 就必填 | embedding 服务的 key。配置里引用了它却没建这个 secret，run 会在配置组装阶段直接崩 |
 | `NCBI_API_KEY` | 周报（可选） | 否 | PubMed E-utilities 限速从 3 提到 10 req/s，自助秒批 |
 | `CONTACT_EMAIL` | 周报（强烈建议） | 否 | 一个值喂四处：PubMed、Crossref 与 OpenAlex 的 polite pool，以及 **Unpaywall**——缺失时 Unpaywall 这一级会被整个跳过，全文命中率大幅下降 |
+| `FOCUS_TOPIC` | 周报（可选） | 否 | 想在周报里单独追踪的主题，如「连续制造在单抗原液生产中的应用」。**留空就是不启用**：不发 LLM 请求、不检索、周报里没有这一节 |
+| `FOCUS_BACKGROUND` | 周报（可选） | 否 | 给 `FOCUS_TOPIC` 补一句背景，帮模型生成更贴切的检索式；`FOCUS_TOPIC` 为空时无意义 |
 | `DEBUG` | 两条都用（可选） | 否 | 调试模式开关 |
 
 ![Zotero 设置页面里的 User ID](assets/userid.png)
@@ -443,7 +448,7 @@ printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
 
 ## 9. 产物与归档
 
-**网页版带左侧目录。** 每篇文献按阅读顺序（本周优先读 → 各主题簇 → 经典补位）编号 `#1`、`#2`……同一篇文献在多处出现（比如既是优先读又在自己的主题簇里）复用同一个号，不会重复编号。左侧是吸顶的侧栏目录，按分节列出全部文献，点击跳转到正文对应位置；窄屏（<860px）会自动收起成顶部横条。这个设计权衡过用带书签的 PDF 代替 HTML——同样内容 PDF 比 HTML 大出 60 倍以上（未优化字体嵌入时甚至到 4MB+），周报要按周提交进仓库、逐周累积，所以留在了 HTML。邮件正文不受影响，仍是线性滚动的摘要式布局。
+**网页版带左侧目录。** 每篇文献按阅读顺序（本周优先读 → 各主题簇 → 特定主题 → 经典补位）编号 `#1`、`#2`……同一篇文献在多处出现（比如既是优先读又在自己的主题簇里）复用同一个号，不会重复编号。左侧是吸顶的侧栏目录，按分节列出全部文献，点击跳转到正文对应位置；窄屏（<860px）会自动收起成顶部横条。这个设计权衡过用带书签的 PDF 代替 HTML——同样内容 PDF 比 HTML 大出 60 倍以上（未优化字体嵌入时甚至到 4MB+），周报要按周提交进仓库、逐周累积，所以留在了 HTML。邮件正文不受影响，仍是线性滚动的摘要式布局。
 
 **PDF 文件名是「年份-第一作者-标题」，不是 DOI。** 例如 `2026-Zhang_Wei-Charge_Variant_Analysis_of_Monoclonal_Antibodies-a3f9c2.pdf`，末尾一段短哈希（多数取自 DOI）防止同作者同年、标题前 80 字重合的两篇文献互相覆盖，也让同一篇文献重跑时文件名保持不变。缺年份/作者时分别退化成 `unknown`；标题、作者、发表日期都拿不到的极端情况退回 `paper-{序号}.pdf`。这个命名只影响新下载的文件，`library/` 目录里已归档的旧文件（DOI 命名）不会被重命名。
 

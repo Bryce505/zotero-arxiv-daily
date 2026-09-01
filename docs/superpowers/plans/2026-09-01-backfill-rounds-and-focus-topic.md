@@ -79,7 +79,7 @@
 
 **Files:** `README.md`、`docs/cmc-weekly-setup.md`、spec 状态更新
 
-- [ ] Step 1: README 增加特定主题一节与新配置键说明
-- [ ] Step 2: setup 文档补 `FOCUS_TOPIC` / `FOCUS_BACKGROUND` 两个变量
-- [ ] Step 3: 跑全量测试
-- [ ] Step 4: 提交并推送
+- [x] Step 1: README 增加特定主题一节与新配置键说明
+- [x] Step 2: setup 文档补 `FOCUS_TOPIC` / `FOCUS_BACKGROUND` 两个变量
+- [x] Step 3: 跑全量测试
+- [x] Step 4: 提交并推送

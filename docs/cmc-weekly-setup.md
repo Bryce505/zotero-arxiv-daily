@@ -80,6 +80,8 @@ Settings → Secrets and variables → Actions → **Secrets**：
 | `OPENAI_API_BASE` | ✅ | |
 | `NCBI_API_KEY` | ✅ | PubMed 限速 3→10 req/s |
 | `CONTACT_EMAIL` | ✅ | 一个值喂四处：PubMed、Crossref 与 OpenAlex 的 polite pool、**以及 Unpaywall**。首跑时这条是空的，Unpaywall 整级被跳过，全文命中率因此只有 1/25 |
+| `FOCUS_TOPIC` | 可选 | 想在周报里单独追一个方向时填，例如「连续制造在单抗原液生产中的应用」。**不填就是不启用**——不会多花一次 LLM 调用，也不会多出一节 |
+| `FOCUS_BACKGROUND` | 可选 | 给上面那个主题补一句背景（你在做什么、关心哪一面），模型据此生成更贴切的检索式 |
 | `SENDER` | ✅ | |
 | `SENDER_PASSWORD` | ✅ | Gmail 应用专用密码 |
 | `RECIPIENTS` | ✅ | 组员邮箱，逗号分隔。全部走 Bcc 互相隐藏 |

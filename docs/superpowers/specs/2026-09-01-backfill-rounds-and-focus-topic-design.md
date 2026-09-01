@@ -1,7 +1,7 @@
 # 补位放宽 / 多轮检索 / 特定主题检索 设计定稿
 
 **日期：** 2026-09-01
-**状态：** 待实现
+**状态：** 已实现
 **上游：**
 - `docs/superpowers/specs/2026-08-22-digest-relevance-and-structure-design.md`（相关性闸门与经典补位原始设计）
 - `docs/superpowers/specs/2026-09-01-w4-test-digest-duplicate-and-thin-week.md`（§5 留下的开放问题，本文档给出决定）
