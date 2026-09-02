@@ -16,7 +16,7 @@ whole line off: no prompt, no request, no section in the report.
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 
 from loguru import logger
 
@@ -29,6 +29,13 @@ from .profile import QueryProfile, query_for_source
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", flags=re.DOTALL)
 _BACKFILL_OVERSAMPLE = 3
 _MIN_CLASSICS_FETCHED = 25
+# The focus line is not a week's news. The operator named a subject, and the
+# answer is whatever the literature holds on it — run 33573304939 found no
+# paper on its topic in seven days, and widening to ninety only filled the
+# section with adjacent-method work. Every source is asked for its best
+# matches across the whole record instead; the topic gate, not the calendar,
+# decides what survives.
+_ALL_TIME_START = date(1900, 1, 1)
 
 
 class _SeenSet:
@@ -64,7 +71,6 @@ class FocusSettings:
     min_papers: int
     max_papers: int
     min_relevance: int
-    window_days: int
 
 
 @dataclass
@@ -95,7 +101,6 @@ def focus_settings(config) -> FocusSettings | None:
         min_papers=int(block.get("min_papers") or 0),
         max_papers=int(block.get("max_papers") or 0) or 8,
         min_relevance=int(block.get("min_relevance") or 0),
-        window_days=int(block.get("window_days") or 0) or 90,
     )
 
 
@@ -201,26 +206,19 @@ def collect_focus_papers(
             f"{len(passed)} cleared relevance {settings.min_relevance} (wanted {wanted})"
         )
 
-    def search_window(window_start: date, rung: str) -> None:
-        found: list[Paper] = []
-        for source in config.search.sources:
-            papers = retriever_for(source).search(
-                query_for_source(profile, source), window_start, end, limit
-            )
-            logger.info(f"{source}/焦点主题「{settings.topic}」({rung}): {len(papers)} candidates")
-            found.extend(papers)
-        take(found, rung, settings.max_papers - len(kept))
+    found: list[Paper] = []
+    for source in config.search.sources:
+        papers = retriever_for(source).search(
+            query_for_source(profile, source), _ALL_TIME_START, end, limit
+        )
+        logger.info(f"{source}/焦点主题「{settings.topic}」: {len(papers)} candidates")
+        found.extend(papers)
+    take(found, "search", settings.max_papers)
 
-    # Three rungs, newest first. The digest's own week leads, because genuinely
-    # new work on the operator's topic is the point. But a topic narrow enough
-    # to be worth naming often has no paper at all in any given week — run
-    # 33573304939 retrieved 51 candidates for one and not one was on topic —
-    # and jumping straight from there to all-time classics skips the most
-    # useful answer of all: the paper from three weeks ago.
-    search_window(start, "week")
     if len(kept) < settings.min_papers:
-        search_window(end - timedelta(days=max(settings.window_days, 8)), f"{settings.window_days}d")
-    if len(kept) < settings.min_papers:
+        # A second pass ranked by citations rather than by each source's own
+        # relevance ordering, which surfaces the established work on a topic
+        # that a relevance-ranked list can bury.
         shortfall = settings.min_papers - len(kept)
         classics = retriever_for("openalex").search_highly_cited(
             profile.plain_query, max(_MIN_CLASSICS_FETCHED, shortfall * _BACKFILL_OVERSAMPLE)

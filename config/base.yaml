@@ -88,10 +88,12 @@ search:
   focus:
     topic: ${oc.env:FOCUS_TOPIC,null}            # 要追的主题，如"连续制造在单抗原液生产中的应用"
     background: ${oc.env:FOCUS_BACKGROUND,null}  # 可选背景，帮模型生成更贴切的检索式
-    min_papers: 3          # 少于这么多时依次放宽：先扩窗口，再取该主题高被引经典
-    window_days: 90        # 本周没有该主题的新文献时，回看多少天（第二级）
+    # 这一节不设时间限制：你点名的是一个主题，不是某一周的新闻，检索覆盖全部年份。
+    # 把关的是相关度，不是日期——主题点名了具体对象时，研究别的对象的文献即使方法
+    # 邻近也判 30-59 分，进不来。
+    min_papers: 3          # 少于这么多时，再按被引排序补检一次（同样不限日期）
     max_papers: 8          # 这一节最多收录几篇
-    min_relevance: 60      # 与该主题的相关度下限（0-100，由 LLM 判定）
+    min_relevance: 75      # 与该主题的相关度下限（0-100，由 LLM 判定）
 
 fulltext:
   enabled: true            # Whether to attempt open-access full-text retrieval.

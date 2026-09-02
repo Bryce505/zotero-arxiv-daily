@@ -57,7 +57,7 @@ def make_config(**focus):
         "background": None,
         "min_papers": 2,
         "max_papers": 4,
-        "min_relevance": 60,
+        "min_relevance": 75,
     }
     settings.update(focus)
     return OmegaConf.create(
@@ -83,24 +83,16 @@ def make_paper(i: int) -> Paper:
 
 
 class StubRetriever:
-    """Answers by rung: the digest week, the widened window, then classics."""
-
-    def __init__(self, fresh=None, recent=None, classics=None):
+    def __init__(self, fresh=None, classics=None):
         self.fresh = fresh if fresh is not None else []
-        self.recent = recent if recent is not None else []
         self.classics = classics if classics is not None else []
         self.calls: list[tuple[str, str]] = []
-        self.windows: list[int] = []
+        self.windows: list[tuple[date, date]] = []
 
     def search(self, query, start, end, limit):
-        span = (end - start).days
-        self.windows.append(span)
-        # The digest's own window is a week; anything longer is the widened rung.
-        if span <= 7:
-            self.calls.append(("search", query))
-            return list(self.fresh)
-        self.calls.append(("widened", query))
-        return list(self.recent)
+        self.windows.append((start, end))
+        self.calls.append(("search", query))
+        return list(self.fresh)
 
     def search_highly_cited(self, query, limit):
         self.calls.append(("highly_cited", query))
@@ -125,7 +117,7 @@ def test_settings_carry_the_topic_and_the_limits():
     settings = focus_settings(make_config(background="做工艺开发"))
     assert settings.topic == "连续制造"
     assert settings.background == "做工艺开发"
-    assert (settings.min_papers, settings.max_papers, settings.min_relevance) == (2, 4, 60)
+    assert (settings.min_papers, settings.max_papers, settings.min_relevance) == (2, 4, 75)
 
 
 # --------------------------------------------------------------------------- profile
@@ -221,51 +213,43 @@ def test_focus_papers_carry_their_topic_reason_for_rendering():
     assert result.papers[0].scoring.relevance == 80
 
 
-# --------------------------------------------------------------------------- the retrieval ladder
+# --------------------------------------------------------------------------- no date limit
 
 
-def test_a_quiet_week_widens_the_window_before_reaching_for_classics():
-    """Run 33573304939: a topic narrow enough that seven days of it is noise.
-    Everything retrieved scored under the floor and the section vanished. A
-    paper from three weeks ago is still what the operator asked to see, and
-    is a better answer than an all-time classic."""
-    retriever = StubRetriever(fresh=[], recent=[make_paper(5)], classics=[make_paper(9)])
+def test_the_focus_search_is_not_limited_to_the_digest_week():
+    """The operator named a topic, not a week. A topic narrow enough to be
+    worth naming usually has nothing published in any given seven days, and
+    restricting to the digest window is what left the section empty in run
+    33573304939 and filled it with off-topic work in the next one."""
+    retriever = StubRetriever(fresh=[make_paper(1)])
     client = stub_client([PROFILE_PAYLOAD, triage_payload(1)])
-    result = _collect(make_config(min_papers=1), retriever, client)
+    _collect(make_config(), retriever, client)
 
-    assert [p.doi for p in result.papers] == ["10.1000/f5"]
-    assert [kind for kind, _ in retriever.calls] == ["search", "widened"]
-    assert max(retriever.windows) > 7, "the second rung must actually widen the window"
+    (window_start, window_end), = retriever.windows
+    assert (window_end - window_start).days > 365 * 20, "the topic search must span the literature"
 
 
-def test_the_widened_rung_is_skipped_when_the_week_already_delivered():
-    retriever = StubRetriever(fresh=[make_paper(i) for i in range(1, 4)], recent=[make_paper(5)])
+def test_a_thin_result_is_topped_up_with_highly_cited_work():
+    retriever = StubRetriever(fresh=[make_paper(1)], classics=[make_paper(9)])
+    client = stub_client([PROFILE_PAYLOAD, triage_payload(1), triage_payload(1)])
+    result = _collect(make_config(min_papers=2), retriever, client)
+
+    assert [p.doi for p in result.papers] == ["10.1000/f1", "10.1000/f9"]
+    assert [kind for kind, _ in retriever.calls] == ["search", "highly_cited"]
+
+
+def test_a_full_result_does_not_reach_for_classics():
+    retriever = StubRetriever(fresh=[make_paper(i) for i in range(1, 4)], classics=[make_paper(9)])
     client = stub_client([PROFILE_PAYLOAD, triage_payload(3)])
     _collect(make_config(min_papers=2), retriever, client)
     assert [kind for kind, _ in retriever.calls] == ["search"]
 
 
-def test_classics_are_the_last_rung_not_the_first_fallback():
-    retriever = StubRetriever(fresh=[], recent=[], classics=[make_paper(9)])
-    client = stub_client([PROFILE_PAYLOAD, triage_payload(1)])
-    result = _collect(make_config(min_papers=1), retriever, client)
-
-    assert [p.doi for p in result.papers] == ["10.1000/f9"]
-    assert [kind for kind, _ in retriever.calls] == ["search", "widened", "highly_cited"]
-
-
-def test_a_paper_the_week_already_judged_is_not_judged_again_when_widening():
-    """Re-judging costs a call and can return a different verdict for the
-    same paper in the same digest."""
+def test_a_paper_the_search_already_judged_is_not_judged_again_as_a_classic():
+    """Re-judging costs a call and can hand the same paper two verdicts in
+    one digest."""
     repeat = make_paper(1)
-    retriever = StubRetriever(fresh=[repeat], recent=[repeat, make_paper(2)])
+    retriever = StubRetriever(fresh=[repeat], classics=[repeat, make_paper(2)])
     client = stub_client([PROFILE_PAYLOAD, triage_payload(1, relevance=30), triage_payload(1)])
     result = _collect(make_config(min_papers=2), retriever, client)
     assert [p.doi for p in result.papers] == ["10.1000/f2"]
-
-
-def test_the_widened_window_length_is_configurable():
-    retriever = StubRetriever(fresh=[], recent=[make_paper(5)])
-    client = stub_client([PROFILE_PAYLOAD, triage_payload(1)])
-    _collect(make_config(min_papers=1, window_days=30), retriever, client)
-    assert max(retriever.windows) == 30

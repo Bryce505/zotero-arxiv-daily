@@ -266,3 +266,35 @@ def test_theme_fit_is_required_by_default():
     row = {"index": 1, "relevance": 88, "reason": "r", "modalities": [], "cluster": "无"}
     triage_papers([paper], stub_client([payload(row)]), LLM_PARAMS, themes=THEMES)
     assert paper.triage is None
+
+
+# --------------------------------------------------------------------------- topic rubric
+
+
+def test_the_topic_rubric_refuses_a_paper_that_is_not_about_the_named_subject():
+    """The 2026-08-W4 focus section shipped four papers whose own reasons said
+    "but not ulinastatin" — xanthine oxidase, tyrosinase, sulfatase and
+    cholinesterase inhibition kinetics, all scored 60-65 under an "adjacent
+    problem" band. Naming a subject has to mean the paper is about that
+    subject, however close the methodology is."""
+    from zotero_arxiv_daily.triage import triage_for_topic
+
+    calls: list = []
+    triage_for_topic(
+        [make_paper("A")], stub_client([payload()], recorder=calls), LLM_PARAMS, "乌司他丁：酶抑制活性动力学研究"
+    )
+    prompt = str(calls[0]["messages"])
+    assert "乌司他丁：酶抑制活性动力学研究" in prompt
+    # The rule, and the shape of failure that forced it.
+    assert "研究对象" in prompt
+    for lost_case in ("黄嘌呤氧化酶", "酪氨酸酶", "胆碱酯酶"):
+        assert lost_case in prompt, "the rubric must name the cases that actually slipped through"
+
+
+def test_the_topic_rubric_still_carries_the_optional_background():
+    from zotero_arxiv_daily.triage import triage_for_topic
+
+    calls: list = []
+    triage_for_topic([make_paper("A")], stub_client([payload()], recorder=calls), LLM_PARAMS,
+                     "乌司他丁", "临床用于急性胰腺炎")
+    assert "临床用于急性胰腺炎" in str(calls[0]["messages"])
