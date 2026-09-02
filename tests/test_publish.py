@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+from pathlib import Path
 
 from omegaconf import OmegaConf
 
@@ -200,6 +201,37 @@ def test_push_rebases_onto_a_concurrent_push_instead_of_losing_the_digest(tmp_pa
     log = _remote_log(remote)
     assert "add digest.md" in log, "the digest commit must survive the race"
     assert "add unrelated.md" in log, "the concurrent commit must not be clobbered"
+
+
+def test_push_rebases_even_though_the_workflow_dirtied_the_checkout(tmp_path):
+    """Run 33573304939, the same data-loss path one layer down.
+
+    weekly.yml writes CUSTOM_CONFIG into config/custom.yaml — a tracked file —
+    before the pipeline starts, so the checkout is dirty for the whole run.
+    Plain `git rebase` refuses to run with unstaged changes, which made the
+    recovery above dead code in the only environment it exists for: the
+    digest was mailed, the rebase bailed, and the archive and seen-DOI state
+    died with the runner.
+    """
+    remote, runner, other = _clone_pair(tmp_path)
+    _commit_file(runner, "config.yaml")
+    _run(["git", "push", "-q", "origin", "main"], runner)
+    _run(["git", "pull", "-q", "--rebase", "origin", "main"], other)
+    dirtied = Path(runner) / "config.yaml"
+    dirtied.write_text("rewritten by the workflow\n", encoding="utf-8")
+
+    _commit_file(runner, "digest.md")
+    _commit_file(other, "unrelated.md")
+    _run(["git", "push", "-q", "origin", "main"], other)
+
+    assert git_push_artefacts(make_config(), cwd=runner) is True
+
+    log = _remote_log(remote)
+    assert "add digest.md" in log
+    assert "add unrelated.md" in log
+    assert dirtied.read_text(encoding="utf-8") == "rewritten by the workflow\n", (
+        "the workflow's own file must come back, or the rest of the run loses its config"
+    )
 
 
 def test_push_reports_failure_when_it_cannot_land(tmp_path):

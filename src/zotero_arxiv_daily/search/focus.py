@@ -169,6 +169,11 @@ def collect_focus_papers(
     kept = _keep_relevant(candidates, config, client, settings)
     excluded |= {d for d in (normalize_doi(p.doi) for p in kept) if d}
 
+    logger.info(
+        f"Focus topic {settings.topic!r}: {len(candidates)} candidates -> "
+        f"{len(kept)} cleared relevance {settings.min_relevance}"
+    )
+
     if len(kept) < settings.min_papers:
         # Same reasoning as the library-wide backfill: a quiet week on a niche
         # topic is better served by an established paper than by nothing.
@@ -178,11 +183,25 @@ def collect_focus_papers(
         )
         for paper in classics:
             paper.is_backfill = True
+        fetched = len(classics)
         classics = drop_seen(dedup_papers(classics), excluded)
-        kept.extend(_keep_relevant(classics, config, client, settings)[:shortfall])
+        topped_up = _keep_relevant(classics, config, client, settings)[:shortfall]
+        kept.extend(topped_up)
+        # Without this the section can come back empty with nothing saying
+        # whether OpenAlex had nothing, or had plenty and none of it was on
+        # topic — the same blind spot the library-wide backfill had.
+        logger.info(
+            f"Focus top-up for {settings.topic!r}: {fetched} fetched from OpenAlex -> "
+            f"{len(classics)} after exclude/dedup -> {len(topped_up)} kept (needed {shortfall})"
+        )
 
     if not kept:
-        logger.warning(f"Focus topic {settings.topic!r} produced no papers this week; section omitted")
+        logger.warning(
+            f"Focus topic {settings.topic!r} produced no papers this week; section omitted. "
+            "Nothing retrieved cleared the topic relevance floor "
+            f"({settings.min_relevance}); lower search.focus.min_relevance, or widen the topic, "
+            "if this repeats"
+        )
         return None
 
     kept.sort(key=lambda p: -(p.scoring.rank_score if p.scoring else 0))

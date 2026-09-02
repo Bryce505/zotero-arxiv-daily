@@ -108,7 +108,14 @@ def git_push_artefacts(config, cwd: str = ".", attempts: int = 5) -> bool:
         if fetch.returncode != 0:
             logger.warning(f"Cannot reach origin: {fetch.stderr.strip()}")
             continue
-        rebase = _run(["git", "rebase", f"origin/{branch}"], cwd)
+        # --autostash, because the checkout is always dirty here: weekly.yml
+        # writes CUSTOM_CONFIG into config/custom.yaml, a tracked file, before
+        # the pipeline starts. Without it `git rebase` refuses outright ("You
+        # have unstaged changes"), which made this whole recovery path dead
+        # code in the one environment it exists for — run 33573304939 mailed
+        # its digest and then lost the archive and the seen-DOI state exactly
+        # that way.
+        rebase = _run(["git", "rebase", "--autostash", f"origin/{branch}"], cwd)
         if rebase.returncode != 0:
             _run(["git", "rebase", "--abort"], cwd)
             logger.error(f"Cannot rebase onto origin/{branch}: {rebase.stderr.strip()}")
