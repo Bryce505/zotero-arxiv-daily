@@ -88,7 +88,8 @@ search:
   focus:
     topic: ${oc.env:FOCUS_TOPIC,null}            # 要追的主题，如"连续制造在单抗原液生产中的应用"
     background: ${oc.env:FOCUS_BACKGROUND,null}  # 可选背景，帮模型生成更贴切的检索式
-    min_papers: 3          # 少于这么多时，用该主题的高被引经典补足
+    min_papers: 3          # 少于这么多时依次放宽：先扩窗口，再取该主题高被引经典
+    window_days: 90        # 本周没有该主题的新文献时，回看多少天（第二级）
     max_papers: 8          # 这一节最多收录几篇
     min_relevance: 60      # 与该主题的相关度下限（0-100，由 LLM 判定）
 

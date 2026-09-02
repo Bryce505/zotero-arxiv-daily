@@ -16,11 +16,11 @@ whole line off: no prompt, no request, no section in the report.
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 from loguru import logger
 
-from ..dedup import dedup_papers, drop_seen, normalize_doi
+from ..dedup import dedup_papers, drop_seen, normalize_doi, title_key
 from ..protocol import Paper
 from ..scoring import score_papers
 from ..triage import triage_for_topic
@@ -28,6 +28,33 @@ from .profile import QueryProfile, query_for_source
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", flags=re.DOTALL)
 _BACKFILL_OVERSAMPLE = 3
+_MIN_CLASSICS_FETCHED = 25
+
+
+class _SeenSet:
+    """DOIs and titles already retrieved, so a later rung does not re-judge them.
+
+    Re-judging costs an LLM call and can hand the same paper two different
+    verdicts inside one digest, which reads as a coin flip to whoever compares
+    the sections.
+    """
+
+    def __init__(self, dois):
+        self._dois = set(dois)
+        self._titles: set[str] = set()
+
+    def unseen(self, papers: list[Paper]) -> list[Paper]:
+        return [
+            p for p in papers
+            if (normalize_doi(p.doi) or "") not in self._dois and title_key(p.title) not in self._titles
+        ]
+
+    def remember(self, papers: list[Paper]) -> None:
+        for paper in papers:
+            doi = normalize_doi(paper.doi)
+            if doi:
+                self._dois.add(doi)
+            self._titles.add(title_key(paper.title))
 
 
 @dataclass(frozen=True)
@@ -37,6 +64,7 @@ class FocusSettings:
     min_papers: int
     max_papers: int
     min_relevance: int
+    window_days: int
 
 
 @dataclass
@@ -67,6 +95,7 @@ def focus_settings(config) -> FocusSettings | None:
         min_papers=int(block.get("min_papers") or 0),
         max_papers=int(block.get("max_papers") or 0) or 8,
         min_relevance=int(block.get("min_relevance") or 0),
+        window_days=int(block.get("window_days") or 0) or 90,
     )
 
 
@@ -157,43 +186,48 @@ def collect_focus_papers(
 
     profile, summary = build_focus_profile(settings.topic, settings.background, client, config.llm)
     limit = int(config.search.get("per_cluster_limit", 25))
-    found: list[Paper] = []
-    for source in config.search.sources:
-        query = query_for_source(profile, source)
-        papers = retriever_for(source).search(query, start, end, limit)
-        logger.info(f"{source}/焦点主题「{settings.topic}」: {len(papers)} candidates")
-        found.extend(papers)
+    seen = _SeenSet(exclude_dois)
+    kept: list[Paper] = []
 
-    excluded = set(exclude_dois)
-    candidates = drop_seen(dedup_papers(found), excluded)
-    kept = _keep_relevant(candidates, config, client, settings)
-    excluded |= {d for d in (normalize_doi(p.doi) for p in kept) if d}
+    def take(papers: list[Paper], rung: str, wanted: int) -> None:
+        """Judge one rung's haul and keep what clears the topic floor."""
+        fetched = len(papers)
+        fresh = seen.unseen(dedup_papers(papers))
+        seen.remember(fresh)
+        passed = _keep_relevant(fresh, config, client, settings)[:wanted]
+        kept.extend(passed)
+        logger.info(
+            f"Focus {rung} for {settings.topic!r}: {fetched} fetched -> {len(fresh)} new -> "
+            f"{len(passed)} cleared relevance {settings.min_relevance} (wanted {wanted})"
+        )
 
-    logger.info(
-        f"Focus topic {settings.topic!r}: {len(candidates)} candidates -> "
-        f"{len(kept)} cleared relevance {settings.min_relevance}"
-    )
+    def search_window(window_start: date, rung: str) -> None:
+        found: list[Paper] = []
+        for source in config.search.sources:
+            papers = retriever_for(source).search(
+                query_for_source(profile, source), window_start, end, limit
+            )
+            logger.info(f"{source}/焦点主题「{settings.topic}」({rung}): {len(papers)} candidates")
+            found.extend(papers)
+        take(found, rung, settings.max_papers - len(kept))
 
+    # Three rungs, newest first. The digest's own week leads, because genuinely
+    # new work on the operator's topic is the point. But a topic narrow enough
+    # to be worth naming often has no paper at all in any given week — run
+    # 33573304939 retrieved 51 candidates for one and not one was on topic —
+    # and jumping straight from there to all-time classics skips the most
+    # useful answer of all: the paper from three weeks ago.
+    search_window(start, "week")
     if len(kept) < settings.min_papers:
-        # Same reasoning as the library-wide backfill: a quiet week on a niche
-        # topic is better served by an established paper than by nothing.
+        search_window(end - timedelta(days=max(settings.window_days, 8)), f"{settings.window_days}d")
+    if len(kept) < settings.min_papers:
         shortfall = settings.min_papers - len(kept)
         classics = retriever_for("openalex").search_highly_cited(
-            profile.plain_query, max(1, shortfall * _BACKFILL_OVERSAMPLE)
+            profile.plain_query, max(_MIN_CLASSICS_FETCHED, shortfall * _BACKFILL_OVERSAMPLE)
         )
         for paper in classics:
             paper.is_backfill = True
-        fetched = len(classics)
-        classics = drop_seen(dedup_papers(classics), excluded)
-        topped_up = _keep_relevant(classics, config, client, settings)[:shortfall]
-        kept.extend(topped_up)
-        # Without this the section can come back empty with nothing saying
-        # whether OpenAlex had nothing, or had plenty and none of it was on
-        # topic — the same blind spot the library-wide backfill had.
-        logger.info(
-            f"Focus top-up for {settings.topic!r}: {fetched} fetched from OpenAlex -> "
-            f"{len(classics)} after exclude/dedup -> {len(topped_up)} kept (needed {shortfall})"
-        )
+        take(classics, "classics", shortfall)
 
     if not kept:
         logger.warning(

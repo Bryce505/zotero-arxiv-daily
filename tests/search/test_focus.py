@@ -83,14 +83,24 @@ def make_paper(i: int) -> Paper:
 
 
 class StubRetriever:
-    def __init__(self, fresh=None, classics=None):
+    """Answers by rung: the digest week, the widened window, then classics."""
+
+    def __init__(self, fresh=None, recent=None, classics=None):
         self.fresh = fresh if fresh is not None else []
+        self.recent = recent if recent is not None else []
         self.classics = classics if classics is not None else []
         self.calls: list[tuple[str, str]] = []
+        self.windows: list[int] = []
 
     def search(self, query, start, end, limit):
-        self.calls.append(("search", query))
-        return list(self.fresh)
+        span = (end - start).days
+        self.windows.append(span)
+        # The digest's own window is a week; anything longer is the widened rung.
+        if span <= 7:
+            self.calls.append(("search", query))
+            return list(self.fresh)
+        self.calls.append(("widened", query))
+        return list(self.recent)
 
     def search_highly_cited(self, query, limit):
         self.calls.append(("highly_cited", query))
@@ -209,3 +219,53 @@ def test_focus_papers_carry_their_topic_reason_for_rendering():
     result = _collect(make_config(), retriever, client)
     assert result.papers[0].triage.reason == "理由 1"
     assert result.papers[0].scoring.relevance == 80
+
+
+# --------------------------------------------------------------------------- the retrieval ladder
+
+
+def test_a_quiet_week_widens_the_window_before_reaching_for_classics():
+    """Run 33573304939: a topic narrow enough that seven days of it is noise.
+    Everything retrieved scored under the floor and the section vanished. A
+    paper from three weeks ago is still what the operator asked to see, and
+    is a better answer than an all-time classic."""
+    retriever = StubRetriever(fresh=[], recent=[make_paper(5)], classics=[make_paper(9)])
+    client = stub_client([PROFILE_PAYLOAD, triage_payload(1)])
+    result = _collect(make_config(min_papers=1), retriever, client)
+
+    assert [p.doi for p in result.papers] == ["10.1000/f5"]
+    assert [kind for kind, _ in retriever.calls] == ["search", "widened"]
+    assert max(retriever.windows) > 7, "the second rung must actually widen the window"
+
+
+def test_the_widened_rung_is_skipped_when_the_week_already_delivered():
+    retriever = StubRetriever(fresh=[make_paper(i) for i in range(1, 4)], recent=[make_paper(5)])
+    client = stub_client([PROFILE_PAYLOAD, triage_payload(3)])
+    _collect(make_config(min_papers=2), retriever, client)
+    assert [kind for kind, _ in retriever.calls] == ["search"]
+
+
+def test_classics_are_the_last_rung_not_the_first_fallback():
+    retriever = StubRetriever(fresh=[], recent=[], classics=[make_paper(9)])
+    client = stub_client([PROFILE_PAYLOAD, triage_payload(1)])
+    result = _collect(make_config(min_papers=1), retriever, client)
+
+    assert [p.doi for p in result.papers] == ["10.1000/f9"]
+    assert [kind for kind, _ in retriever.calls] == ["search", "widened", "highly_cited"]
+
+
+def test_a_paper_the_week_already_judged_is_not_judged_again_when_widening():
+    """Re-judging costs a call and can return a different verdict for the
+    same paper in the same digest."""
+    repeat = make_paper(1)
+    retriever = StubRetriever(fresh=[repeat], recent=[repeat, make_paper(2)])
+    client = stub_client([PROFILE_PAYLOAD, triage_payload(1, relevance=30), triage_payload(1)])
+    result = _collect(make_config(min_papers=2), retriever, client)
+    assert [p.doi for p in result.papers] == ["10.1000/f2"]
+
+
+def test_the_widened_window_length_is_configurable():
+    retriever = StubRetriever(fresh=[], recent=[make_paper(5)])
+    client = stub_client([PROFILE_PAYLOAD, triage_payload(1)])
+    _collect(make_config(min_papers=1, window_days=30), retriever, client)
+    assert max(retriever.windows) == 30
