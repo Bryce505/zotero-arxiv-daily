@@ -1,4 +1,8 @@
-# 第三方 skill 来源说明
+# Third-party skill provenance (superpowers, ponytail)
+
+> Vendored, unmodified snapshots of the [superpowers](https://github.com/obra/superpowers) and
+> [ponytail](https://github.com/DietrichGebert/ponytail) Claude Code skill packs — see the
+> per-package sections below for upstream commit, license, and exactly what was copied.
 
 本目录记录 `.claude/skills/`、`.claude/hooks/`、`.claude/commands/` 下部分内容的来源,
 这些内容是从对应上游仓库的 `skills/`(和 `hooks/`)子目录直接搬运而来,**没有**通过
