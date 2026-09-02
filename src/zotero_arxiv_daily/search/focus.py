@@ -24,7 +24,7 @@ from ..dedup import dedup_papers, drop_seen, normalize_doi, title_key
 from ..protocol import Paper
 from ..scoring import score_papers
 from ..triage import triage_for_topic
-from .profile import QueryProfile, query_for_source
+from .profile import _CONJUNCTIVE_SOURCES, or_join
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", flags=re.DOTALL)
 _BACKFILL_OVERSAMPLE = 3
@@ -73,6 +73,43 @@ class FocusSettings:
     min_relevance: int
 
 
+@dataclass(frozen=True)
+class FocusProfile:
+    """Query forms for a topic that names a subject.
+
+    Deliberately not ``QueryProfile``. A library theme is a spread of related
+    concepts, so OR-ing its terms is right: any of them marks a paper as
+    on-theme. A focus topic names a *subject*, and OR-ing that subject in
+    with the terms describing the angle makes the subject optional — which
+    is exactly what happened. Europe PMC was asked for
+
+        ("ulinastatin" OR "urinary trypsin inhibitor" OR "enzyme inhibition"
+         OR "kinetic parameters" OR "inhibitory kinetics")
+
+    and duly returned enzyme-kinetics papers about other enzymes entirely.
+    Here the subject group is ANDed with the aspect group, so a paper that
+    only matches the angle cannot come back.
+    """
+
+    topic: str
+    subject_terms: list[str]
+    aspect_terms: list[str]
+    pubmed_query: str
+    plain_query: str
+
+    def query_for(self, source: str) -> str:
+        """Return the query form *source* can actually answer."""
+        if source == "pubmed":
+            return self.pubmed_query or self.plain_query
+        if source in _CONJUNCTIVE_SOURCES:
+            subject = or_join(self.subject_terms) or or_join([self.plain_query])
+            aspect = or_join(self.aspect_terms)
+            if not subject:
+                return self.plain_query
+            return f"({subject}) AND ({aspect})" if aspect else subject
+        return self.plain_query
+
+
 @dataclass
 class FocusResult:
     """One rendered section: the topic, a sentence about it, its papers."""
@@ -104,21 +141,30 @@ def focus_settings(config) -> FocusSettings | None:
     )
 
 
-def build_focus_profile(topic: str, background: str | None, client, llm_params: dict) -> tuple[QueryProfile, str]:
+def build_focus_profile(topic: str, background: str | None, client, llm_params: dict) -> tuple[FocusProfile, str]:
     """Turn the operator's topic into query forms plus a one-line summary.
 
-    Reuses ``QueryProfile`` rather than inventing a shape: every source
-    already knows how to read one, so the focus line gets PubMed's boolean
-    form and Europe PMC/OpenAlex's OR'd terms for free.  A failure degrades
-    to searching the raw topic text — losing the summary is cosmetic, losing
-    the search would be the whole feature.
+    The model is asked to split the topic in two: the terms that identify the
+    *subject* (including its English name and the synonyms the literature
+    actually uses — a Chinese topic will not match anything otherwise) and
+    the terms that describe the *angle*. Only that split lets the subject be
+    required rather than merely one option among many.
+
+    A failure degrades to searching the raw topic text: losing the summary is
+    cosmetic, losing the search would be the whole feature.
     """
     context = f"\n用户补充的背景：{background}" if background else ""
     prompt = (
         f"用户希望在文献周报里追踪这个主题：{topic}{context}\n\n"
-        "请先用一句话（不超过 40 字）概括这个主题在关注什么，再为它生成检索式，"
-        "用于在 PubMed / Crossref / OpenAlex 上找该主题的文献。只输出 JSON：\n"
-        '{"summary":"一句话概括","mesh_terms":["..."],"free_terms":["..."],'
+        "请先用一句话（不超过 40 字）概括这个主题在关注什么，再把它拆成两组检索词：\n"
+        "- subject_terms：**主题点名的那个研究对象**（药物/分子/蛋白/材料/技术）的英文名称，"
+        "以及文献里实际使用的同义词、别名、缩写。这一组是检索时的必要条件，必须填；"
+        "中文名不要直接写进去，要给出英文检索词。\n"
+        "- aspect_terms：主题关注的**切面**（如动力学、稳定性、纯化、临床疗效）的英文检索词，"
+        "不要把研究对象重复写进这一组；主题没有明确切面时给空数组。\n"
+        "pubmed_query 请把两组用 AND 连起来（对象组必须出现），只有对象组时就只写对象组。\n\n"
+        "只输出 JSON：\n"
+        '{"summary":"一句话概括","subject_terms":["..."],"aspect_terms":["..."],'
         '"pubmed_query":"带 [MeSH] 与 [tiab] 限定的布尔式","plain_query":"英文自然语言检索词"}'
     )
     try:
@@ -136,19 +182,23 @@ def build_focus_profile(topic: str, background: str | None, client, llm_params: 
         if match is None:
             raise ValueError("no JSON object found in the response")
         data = json.loads(match.group(0))
-        return (
-            QueryProfile(
-                cluster=topic,
-                mesh_terms=[str(t) for t in data.get("mesh_terms", [])],
-                free_terms=[str(t) for t in data.get("free_terms", [])],
-                pubmed_query=str(data.get("pubmed_query", "")),
-                plain_query=str(data.get("plain_query", "")) or topic,
-            ),
-            str(data.get("summary", "")).strip(),
+        subject = [str(t).strip() for t in data.get("subject_terms", []) if str(t).strip()]
+        profile = FocusProfile(
+            topic=topic,
+            # Falling back to the topic itself keeps the subject required even
+            # when the model forgets to name it.
+            subject_terms=subject or [topic],
+            aspect_terms=[str(t).strip() for t in data.get("aspect_terms", []) if str(t).strip()],
+            pubmed_query=str(data.get("pubmed_query", "")),
+            plain_query=str(data.get("plain_query", "")) or topic,
         )
+        logger.info(
+            f"Focus topic {topic!r}: subject {profile.subject_terms}, aspect {profile.aspect_terms}"
+        )
+        return profile, str(data.get("summary", "")).strip()
     except Exception as exc:  # noqa: BLE001 - the focus line must degrade, not fail
         logger.warning(f"Could not distil a query profile for {topic!r} ({exc}); searching the topic as given")
-        return QueryProfile(cluster=topic, mesh_terms=[], free_terms=[], pubmed_query="", plain_query=topic), ""
+        return FocusProfile(topic=topic, subject_terms=[topic], aspect_terms=[], pubmed_query="", plain_query=topic), ""
 
 
 def _keep_relevant(papers: list[Paper], config, client, settings: FocusSettings) -> list[Paper]:
@@ -209,7 +259,7 @@ def collect_focus_papers(
     found: list[Paper] = []
     for source in config.search.sources:
         papers = retriever_for(source).search(
-            query_for_source(profile, source), _ALL_TIME_START, end, limit
+            profile.query_for(source), _ALL_TIME_START, end, limit
         )
         logger.info(f"{source}/焦点主题「{settings.topic}」: {len(papers)} candidates")
         found.extend(papers)

@@ -36,6 +36,8 @@ class QueryProfile:
 # a record containing all twenty-odd words and they return nothing at all.
 # Measured on the first live run: Crossref 65 hits, these two 0 across every
 # cluster.  They get the free terms OR'd instead.
+# Read by search/focus.py too: the same sources need the same treatment there,
+# only with the subject group required rather than OR'd in with everything else.
 _CONJUNCTIVE_SOURCES = frozenset({"europepmc", "openalex"})
 _MAX_OR_TERMS = 12
 

@@ -18,9 +18,9 @@ LLM_PARAMS = {"generation_kwargs": {"model": "stub-model"}}
 PROFILE_PAYLOAD = json.dumps(
     {
         "summary": "连续制造在单抗原液生产中的工艺控制与放行策略。",
-        "mesh_terms": ["Antibodies, Monoclonal"],
-        "free_terms": ["continuous manufacturing", "perfusion"],
-        "pubmed_query": '("continuous manufacturing"[tiab])',
+        "subject_terms": ["continuous manufacturing", "continuous bioprocessing"],
+        "aspect_terms": ["process control", "perfusion"],
+        "pubmed_query": '("continuous manufacturing"[tiab]) AND ("process control"[tiab])',
         "plain_query": "continuous manufacturing monoclonal antibody",
     },
     ensure_ascii=False,
@@ -132,16 +132,55 @@ def test_the_topic_and_background_reach_the_prompt():
 
 def test_the_profile_carries_every_query_form_and_a_summary():
     profile, summary = build_focus_profile("连续制造", None, stub_client([PROFILE_PAYLOAD]), LLM_PARAMS)
-    assert profile.cluster == "连续制造"
-    assert profile.free_terms == ["continuous manufacturing", "perfusion"]
+    assert profile.subject_terms == ["continuous manufacturing", "continuous bioprocessing"]
+    assert profile.aspect_terms == ["process control", "perfusion"]
     assert profile.plain_query == "continuous manufacturing monoclonal antibody"
     assert summary.startswith("连续制造在单抗")
+
+
+def test_the_subject_is_required_not_merely_one_option_among_many():
+    """The bug behind three empty-or-off-topic focus sections. The generated
+    Europe PMC query was ("ulinastatin" OR "urinary trypsin inhibitor" OR
+    "enzyme inhibition" OR "kinetic parameters" OR "inhibitory kinetics") —
+    an OR list, so a paper matching only "enzyme inhibition" came back and
+    the drug name was effectively optional. or_join is right for a library
+    theme, which is a spread of related concepts; it is wrong for a topic
+    that names a subject."""
+    profile, _ = build_focus_profile("连续制造", None, stub_client([PROFILE_PAYLOAD]), LLM_PARAMS)
+    query = profile.query_for("europepmc")
+
+    subject, _, aspect = query.partition(" AND ")
+    assert aspect, "the subject group must be ANDed with the aspect group, never OR'd into it"
+    assert '"continuous manufacturing"' in subject and '"continuous bioprocessing"' in subject
+    assert '"process control"' in aspect
+    assert '"process control"' not in subject, "an aspect term must not stand in for the subject"
+
+
+def test_a_topic_with_no_separate_aspect_searches_on_the_subject_alone():
+    payload = json.dumps(
+        {"summary": "s", "subject_terms": ["ulinastatin"], "aspect_terms": [],
+         "pubmed_query": "", "plain_query": "ulinastatin"},
+        ensure_ascii=False,
+    )
+    profile, _ = build_focus_profile("乌司他丁", None, stub_client([payload]), LLM_PARAMS)
+    assert profile.query_for("openalex") == '"ulinastatin"'
+
+
+def test_the_relevance_ranked_sources_get_the_plain_query():
+    profile, _ = build_focus_profile("连续制造", None, stub_client([PROFILE_PAYLOAD]), LLM_PARAMS)
+    assert profile.query_for("crossref") == "continuous manufacturing monoclonal antibody"
+
+
+def test_pubmed_gets_its_boolean_form():
+    profile, _ = build_focus_profile("连续制造", None, stub_client([PROFILE_PAYLOAD]), LLM_PARAMS)
+    assert profile.query_for("pubmed").startswith('("continuous manufacturing"[tiab])')
 
 
 def test_a_failed_digestion_still_searches_on_the_raw_topic():
     """Losing the summary is cosmetic; losing the search is not."""
     profile, summary = build_focus_profile("连续制造", None, stub_client([RuntimeError("down")]), LLM_PARAMS)
     assert profile.plain_query == "连续制造"
+    assert profile.query_for("europepmc") == '"连续制造"'
     assert summary == ""
 
 
