@@ -123,3 +123,105 @@ def test_backfill_without_a_gate_keeps_everything():
             return [make_paper("10.1/a", 5)]
 
     assert len(backfill_papers(profiles, Retriever(), needed=1, exclude_dois=set())) == 1
+
+
+# --------------------------------------------------------------------------- multi-round retries
+
+
+class RoundRetriever:
+    """Answers each distinct query with its own pool, recording the order."""
+
+    def __init__(self, pools: dict[str, list[Paper]]):
+        self.pools = pools
+        self.calls: list[str] = []
+
+    def search_highly_cited(self, query, limit):
+        self.calls.append(query)
+        return [
+            Paper(
+                source=p.source,
+                title=p.title,
+                authors=[],
+                abstract=p.abstract,
+                url=p.url,
+                doi=p.doi,
+                cited_by_count=p.cited_by_count,
+            )
+            for p in self.pools.get(query, [])
+        ]
+
+
+ONE_PROFILE = [
+    QueryProfile(cluster="a", mesh_terms=[], free_terms=[], pubmed_query="", plain_query="round one")
+]
+
+
+def test_a_short_round_triggers_a_requery_and_a_second_round():
+    """One round of the same query is what left run 33517443909 with zero
+    classics; a second angle is the cheapest thing that can still find some."""
+    retriever = RoundRetriever(
+        {"round one": [make_paper("10.1000/a", 100)], "round two": [make_paper("10.1000/b", 90)]}
+    )
+    asked: list = []
+
+    def requery(profiles, tried):
+        asked.append(dict(tried))
+        return {"a": "round two"}
+
+    result = backfill_papers(ONE_PROFILE, retriever, needed=2, exclude_dois=set(), requery=requery)
+    assert [p.doi for p in result] == ["10.1000/a", "10.1000/b"]
+    assert retriever.calls == ["round one", "round two"]
+    assert asked == [{"a": ["round one"]}], "the requery must know what has already been tried"
+
+
+def test_rounds_stop_as_soon_as_enough_papers_are_found():
+    retriever = RoundRetriever({"round one": [make_paper(f"10.1000/{i}", 100 - i) for i in range(5)]})
+
+    def requery(profiles, tried):
+        raise AssertionError("no second round is needed once the quota is met")
+
+    assert len(backfill_papers(ONE_PROFILE, retriever, needed=3, exclude_dois=set(), requery=requery)) == 3
+    assert retriever.calls == ["round one"]
+
+
+def test_rounds_are_capped():
+    retriever = RoundRetriever({"round one": [make_paper("10.1000/a", 100)]})
+    rounds = {"n": 1}
+
+    def requery(profiles, tried):
+        rounds["n"] += 1
+        return {"a": f"round {rounds['n']}"}  # always a query with an empty pool
+
+    backfill_papers(ONE_PROFILE, retriever, needed=9, exclude_dois=set(), requery=requery, max_rounds=3)
+    assert len(retriever.calls) == 3
+
+
+def test_without_a_requery_only_one_round_runs():
+    """Unchanged behaviour for any caller that does not pass one."""
+    retriever = RoundRetriever({"round one": [make_paper("10.1000/a", 100)]})
+    assert len(backfill_papers(ONE_PROFILE, retriever, needed=5, exclude_dois=set())) == 1
+    assert retriever.calls == ["round one"]
+
+
+def test_a_requery_that_fails_to_produce_queries_stops_the_loop():
+    retriever = RoundRetriever({"round one": [make_paper("10.1000/a", 100)]})
+    backfill_papers(ONE_PROFILE, retriever, needed=5, exclude_dois=set(), requery=lambda p, t: {})
+    assert retriever.calls == ["round one"]
+
+
+def test_a_later_round_does_not_re_gate_papers_an_earlier_round_rejected():
+    """Re-judging the same paper is a wasted LLM call, and the second verdict
+    could differ from the first, which would look like a flake to a reader."""
+    repeat = make_paper("10.1000/dup", 100)
+    retriever = RoundRetriever({"round one": [repeat], "round two": [repeat, make_paper("10.1000/new", 50)]})
+    gated: list[list[str]] = []
+
+    def gate(papers):
+        gated.append([p.doi for p in papers])
+        return [p for p in papers if p.doi != "10.1000/dup"]  # rejects the repeat every time
+
+    backfill_papers(
+        ONE_PROFILE, retriever, needed=2, exclude_dois=set(), gate=gate,
+        requery=lambda p, t: {"a": "round two"},
+    )
+    assert gated == [["10.1000/dup"], ["10.1000/new"]]

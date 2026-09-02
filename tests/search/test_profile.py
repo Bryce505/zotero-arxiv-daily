@@ -184,3 +184,55 @@ class TestQueryForSource:
             plain_query="charge variant analysis",
         )
         assert query_for_source(bare, "pubmed") == "charge variant analysis"
+
+
+# --------------------------------------------------------------------------- alternate queries
+
+
+def test_alternate_queries_asks_for_wording_that_has_not_been_tried():
+    from zotero_arxiv_daily.search.profile import alternate_queries
+
+    calls: list = []
+    client = stub_client('{"电荷异质性": "charge variant icIEF", "HCP": "host cell protein LC-MS"}', calls)
+    profiles = [
+        QueryProfile(cluster="电荷异质性", mesh_terms=[], free_terms=[], pubmed_query="", plain_query="p1"),
+        QueryProfile(cluster="HCP", mesh_terms=[], free_terms=[], pubmed_query="", plain_query="p2"),
+    ]
+    fresh = alternate_queries(profiles, {"电荷异质性": ["p1"], "HCP": ["p2"]}, client, LLM_PARAMS)
+    assert fresh == {"电荷异质性": "charge variant icIEF", "HCP": "host cell protein LC-MS"}
+    prompt = str(calls[0]["messages"])
+    assert "p1" in prompt and "p2" in prompt, "the model must see what was already spent"
+
+
+def test_alternate_queries_drops_a_theme_it_does_not_know():
+    from zotero_arxiv_daily.search.profile import alternate_queries
+
+    client = stub_client('{"电荷异质性": "ok", "一个不存在的主题": "nope"}')
+    profiles = [
+        QueryProfile(cluster="电荷异质性", mesh_terms=[], free_terms=[], pubmed_query="", plain_query="p1")
+    ]
+    assert alternate_queries(profiles, {}, client, LLM_PARAMS) == {"电荷异质性": "ok"}
+
+
+def test_alternate_queries_returns_nothing_when_the_model_fails():
+    """A failed retry must degrade to "one round", never raise into the run."""
+    from zotero_arxiv_daily.search.profile import alternate_queries
+
+    def boom(**kwargs):
+        raise RuntimeError("down")
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=boom)))
+    profiles = [
+        QueryProfile(cluster="a", mesh_terms=[], free_terms=[], pubmed_query="", plain_query="p1")
+    ]
+    assert alternate_queries(profiles, {}, client, LLM_PARAMS) == {}
+
+
+def test_alternate_queries_ignores_a_repeat_of_something_already_tried():
+    from zotero_arxiv_daily.search.profile import alternate_queries
+
+    client = stub_client('{"a": "p1"}')  # exactly what round one already used
+    profiles = [
+        QueryProfile(cluster="a", mesh_terms=[], free_terms=[], pubmed_query="", plain_query="p1")
+    ]
+    assert alternate_queries(profiles, {"a": ["p1"]}, client, LLM_PARAMS) == {}

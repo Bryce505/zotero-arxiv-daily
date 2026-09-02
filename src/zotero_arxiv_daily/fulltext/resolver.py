@@ -24,6 +24,20 @@ _UNSAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]")
 _PDF_MAGIC = b"%PDF"
 _TITLE_MAX_LEN = 80
 
+# A DOI-keyed lookup (Unpaywall, Europe PMC) can answer with a real PDF that
+# is nonetheless the wrong paper: an upstream record with a stale or
+# mismatched DOI, or a location service that matched loosely. The fetch
+# "succeeds" and silently hands the extractor a different paper's text under
+# this one's title. _matches_title() is the cheap guard against that.
+_WORD_RE = re.compile(r"[^\W\d_]{4,}", re.UNICODE)
+_MIN_TITLE_WORDS = 4
+_TITLE_MATCH_RATIO = 0.35
+_TITLE_MATCH_WINDOW = 6000
+# Sources whose fetch is keyed on paper.doi: a mismatch here implicates the
+# DOI itself, not just the fetch. "direct" (paper.pdf_url) carries no such
+# evidence, so it is left out on purpose.
+_DOI_KEYED_SOURCES = ("unpaywall", "europepmc")
+
 
 @dataclass
 class FullTextResult:
@@ -132,6 +146,25 @@ def _filename_for(paper: Paper, index: int) -> str:
     return _UNSAFE_NAME_RE.sub("_", stem) + ".pdf"
 
 
+def _title_words(text: str) -> set[str]:
+    return {w.lower() for w in _WORD_RE.findall(text or "")}
+
+
+def _matches_title(title: str, full_text: str) -> bool:
+    """Best-effort check that *full_text* is actually about *title*.
+
+    Titles too short to carry enough distinctive words are let through
+    unchecked — rejecting those risks a false positive on a real match, and
+    a short/generic title is exactly where that risk is highest.
+    """
+    words = _title_words(title)
+    if len(words) < _MIN_TITLE_WORDS:
+        return True
+    haystack = _title_words(full_text[:_TITLE_MATCH_WINDOW])
+    hits = sum(1 for w in words if w in haystack)
+    return (hits / len(words)) >= _TITLE_MATCH_RATIO
+
+
 def download_fulltext(papers: list[Paper], config, out_dir: str) -> None:
     """Resolve, save and text-extract full text for *papers*, in place."""
     os.makedirs(out_dir, exist_ok=True)
@@ -151,4 +184,21 @@ def download_fulltext(papers: list[Paper], config, out_dir: str) -> None:
         except Exception as exc:  # noqa: BLE001 - keep the PDF even if extraction fails
             logger.warning(f"Failed to extract markdown from {path}: {exc}")
             paper.full_text = None
+
+        if paper.full_text and not _matches_title(paper.title, paper.full_text):
+            logger.warning(
+                f"Discarding full text fetched for {paper.title!r} (source={result.source}): "
+                "it does not mention the title, so it is very likely the wrong paper"
+            )
+            os.remove(path)
+            paper.pdf_path = None
+            paper.full_text = None
+            paper.oa_status = "closed"
+            hits -= 1
+            if result.source in _DOI_KEYED_SOURCES:
+                # The fetch was keyed on this DOI and landed on a different
+                # paper, so the DOI itself is suspect: stop building the
+                # public link from it rather than send a reader to a paper
+                # other than the one shown under this title.
+                paper.doi = None
     logger.info(f"Full text resolved for {hits}/{len(papers)} papers")

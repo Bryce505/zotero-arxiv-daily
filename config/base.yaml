@@ -81,6 +81,19 @@ search:
   cluster_cache: state/theme_clusters.json  # Rebuilt only when the corpus changes.
   profile_cache: state/query_profiles.json  # Rebuilt only when the cluster set changes.
   seen_state: state/seen_dois.json          # DOIs already delivered, for cross-week de-duplication.
+  # —— 特定主题（可选的第二条检索线）——
+  # 库内主题是从 Zotero 语料聚出来的；这一节是你自己点名要追的方向，可以和库
+  # 内主题无关。topic 留空（默认）= 整条线不启用：不发 LLM 请求、不检索、周报
+  # 里没有这一节。相关度用的是"与这个主题相关吗"，不是全局那把生物药 CMC 尺子。
+  focus:
+    topic: ${oc.env:FOCUS_TOPIC,null}            # 要追的主题，如"连续制造在单抗原液生产中的应用"
+    background: ${oc.env:FOCUS_BACKGROUND,null}  # 可选背景，帮模型生成更贴切的检索式
+    # 这一节不设时间限制：你点名的是一个主题，不是某一周的新闻，检索覆盖全部年份。
+    # 把关的是相关度，不是日期——主题点名了具体对象时，研究别的对象的文献即使方法
+    # 邻近也判 30-59 分，进不来。
+    min_papers: 3          # 少于这么多时，再按被引排序补检一次（同样不限日期）
+    max_papers: 8          # 这一节最多收录几篇
+    min_relevance: 75      # 与该主题的相关度下限（0-100，由 LLM 判定）
 
 fulltext:
   enabled: true            # Whether to attempt open-access full-text retrieval.
@@ -88,8 +101,14 @@ fulltext:
   max_bytes: 20000000      # Reject any single PDF larger than this.
 
 report:
-  min_papers: 15           # Below this, top up with highly-cited backfill.
-  max_papers: 25           # Hard ceiling on the digest length.
+  # Two independent knobs, not one range: max_papers caps the fresh quota
+  # (allocate_quota), min_papers is the floor a thin week tops up towards
+  # with highly-cited backfill (spec 8.5). Backfill is best-effort — if
+  # OpenAlex has too few citable, on-theme classics to reach min_papers, the
+  # digest still ships smaller than this and a WARNING names why (see
+  # backfill_papers() / WeeklyExecutor.run()) rather than failing silently.
+  min_papers: 15           # Below this many fresh papers, top up with highly-cited backfill.
+  max_papers: 25           # Hard ceiling on the digest length (fresh papers only; quota total).
   top_picks: 3             # Size of the "read these first" section.
   min_per_cluster: 1       # Floor so a small theme is never crowded out.
   # —— 相关性闸门 ——

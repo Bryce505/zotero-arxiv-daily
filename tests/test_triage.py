@@ -222,3 +222,79 @@ def test_theme_verdicts_are_matched_by_index_not_by_order():
     triage_papers([fits, rejected], stub_client([payload(row2, row1)]), LLM_PARAMS, themes=THEMES)
     assert fits.cluster == "HCP"
     assert rejected.triage is None
+
+
+# --------------------------------------------------------------------------- loosened theme fit
+
+
+def test_loose_mode_keeps_a_paper_the_model_says_fits_no_theme():
+    """Backfill's bar. Run 33517443909 rejected 13/13 highly-cited backfill
+    candidates on theme fit alone (0 on relevance, 0 on score): "does this
+    belong to one of this week's five narrow themes" is a stricter and
+    different question from "is this worth reading for this library"."""
+    paper = make_paper("A")
+    paper.cluster = "HCP"
+    row = {"index": 1, "relevance": 88, "reason": "经典综述", "modalities": [], "cluster": "无"}
+    triage_papers([paper], stub_client([payload(row)]), LLM_PARAMS, themes=THEMES, require_theme_fit=False)
+    assert paper.triage is not None
+    assert paper.triage.relevance == 88
+    assert paper.cluster == "HCP"  # the provisional assignment still decides where it shows
+
+
+def test_loose_mode_still_takes_a_confident_theme_correction():
+    """Loosening only removes the rejection; a real verdict is still better
+    routing than embedding similarity and is still applied."""
+    paper = make_paper("A")
+    paper.cluster = "电荷"
+    row = {"index": 1, "relevance": 70, "reason": "r", "modalities": [], "cluster": "HCP"}
+    triage_papers([paper], stub_client([payload(row)]), LLM_PARAMS, themes=THEMES, require_theme_fit=False)
+    assert paper.cluster == "HCP"
+
+
+def test_loose_mode_does_not_rescue_a_paper_the_model_never_judged():
+    """Unjudged is not the same as "judged, fits nothing" — an LLM outage
+    must not become a free pass, in either mode."""
+    papers = [make_paper("A")]
+    triage_papers(papers, stub_client([RuntimeError("down")]), LLM_PARAMS, themes=THEMES,
+                  require_theme_fit=False)
+    assert papers[0].triage is None
+
+
+def test_theme_fit_is_required_by_default():
+    paper = make_paper("A")
+    paper.cluster = "HCP"
+    row = {"index": 1, "relevance": 88, "reason": "r", "modalities": [], "cluster": "无"}
+    triage_papers([paper], stub_client([payload(row)]), LLM_PARAMS, themes=THEMES)
+    assert paper.triage is None
+
+
+# --------------------------------------------------------------------------- topic rubric
+
+
+def test_the_topic_rubric_refuses_a_paper_that_is_not_about_the_named_subject():
+    """The 2026-08-W4 focus section shipped four papers whose own reasons said
+    "but not ulinastatin" — xanthine oxidase, tyrosinase, sulfatase and
+    cholinesterase inhibition kinetics, all scored 60-65 under an "adjacent
+    problem" band. Naming a subject has to mean the paper is about that
+    subject, however close the methodology is."""
+    from zotero_arxiv_daily.triage import triage_for_topic
+
+    calls: list = []
+    triage_for_topic(
+        [make_paper("A")], stub_client([payload()], recorder=calls), LLM_PARAMS, "乌司他丁：酶抑制活性动力学研究"
+    )
+    prompt = str(calls[0]["messages"])
+    assert "乌司他丁：酶抑制活性动力学研究" in prompt
+    # The rule, and the shape of failure that forced it.
+    assert "研究对象" in prompt
+    for lost_case in ("黄嘌呤氧化酶", "酪氨酸酶", "胆碱酯酶"):
+        assert lost_case in prompt, "the rubric must name the cases that actually slipped through"
+
+
+def test_the_topic_rubric_still_carries_the_optional_background():
+    from zotero_arxiv_daily.triage import triage_for_topic
+
+    calls: list = []
+    triage_for_topic([make_paper("A")], stub_client([payload()], recorder=calls), LLM_PARAMS,
+                     "乌司他丁", "临床用于急性胰腺炎")
+    assert "临床用于急性胰腺炎" in str(calls[0]["messages"])

@@ -39,7 +39,12 @@ from zotero_arxiv_daily.reranker.vector_cache import cached_similarity_matrix
 from zotero_arxiv_daily.retriever import get_query_retriever_cls
 from zotero_arxiv_daily.scoring import passing_papers, score_papers
 from zotero_arxiv_daily.search.cluster import assign_clusters, load_or_build_clusters
-from zotero_arxiv_daily.search.profile import load_or_build_profiles, query_for_source
+from zotero_arxiv_daily.search.focus import collect_focus_papers
+from zotero_arxiv_daily.search.profile import (
+    alternate_queries,
+    load_or_build_profiles,
+    query_for_source,
+)
 from zotero_arxiv_daily.triage import triage_papers
 from zotero_arxiv_daily.weeknum import library_dir, report_paths, week_label, week_window
 
@@ -68,6 +73,7 @@ def attachment_candidates(digest, limit: int) -> list[str]:
     ordered.extend(sorted(rest, key=lambda p: -(p.score or 0.0)))
     # A thin week is mostly backfill; attaching nothing would be perverse.
     ordered.extend(p for p in digest.backfill if id(p) not in seen)
+    ordered.extend(p for p in digest.focus_papers if id(p) not in seen)
     return [p.pdf_path for p in ordered if p.pdf_path][:limit]
 
 
@@ -164,7 +170,7 @@ class WeeklyExecutor(Executor):
             logger.warning(f"Cluster-description similarity unusable ({exc}); routing by corpus mean only")
             return None
 
-    def _gate(self, papers):
+    def _gate(self, papers, require_theme_fit: bool = True):
         """Triage, score, and keep only what clears both thresholds.
 
         ``themes`` gives triage the real theme names and descriptions to
@@ -176,6 +182,15 @@ class WeeklyExecutor(Executor):
         what the real themes are. Read defensively: this method is also
         reachable, via the ``gate`` callback passed to backfill_papers, from
         any caller that might not have gone through run() first.
+
+        ``require_theme_fit=False`` is what that backfill callback passes.
+        Highly-cited classics are sourced by citation count across the whole
+        of OpenAlex, so asking them to also land inside one of the five
+        narrow themes this week's corpus clustered into rejects nearly all
+        of them: run 33517443909 dropped 13 of 13 backfill candidates on
+        theme fit alone — none on relevance, none on score — and shipped a
+        five-paper digest with no classics at all. Both numeric gates still
+        apply either way.
         """
         if not papers:
             return []
@@ -186,6 +201,7 @@ class WeeklyExecutor(Executor):
             self.config.llm,
             int(self.config.report.get("triage_batch", 8)),
             themes=themes,
+            require_theme_fit=require_theme_fit,
         )
         score_papers(papers, self.config)
         return passing_papers(papers, self.config)
@@ -261,13 +277,46 @@ class WeeklyExecutor(Executor):
                 get_query_retriever_cls("openalex")(self.config),
                 shortfall,
                 exclude | {d for d in (normalize_doi(p.doi) for p in chosen) if d},
-                gate=self._gate,
+                gate=lambda papers: self._gate(papers, require_theme_fit=False),
+                requery=lambda profs, tried: alternate_queries(
+                    profs, tried, self.openai_client, self.config.llm
+                ),
             )
 
-        delivered = chosen + backfill
+        # The operator's own topic, searched separately and judged against
+        # that topic rather than against biologics CMC. Off unless configured;
+        # excludes what this week already picked so the same paper cannot
+        # appear twice in one digest.
+        try:
+            focus = collect_focus_papers(
+                self.config,
+                self.openai_client,
+                lambda source: get_query_retriever_cls(source)(self.config),
+                start,
+                end,
+                exclude | {d for d in (normalize_doi(p.doi) for p in chosen + backfill) if d},
+            )
+        except Exception as exc:  # noqa: BLE001 - an optional section must never cost the digest
+            logger.warning(f"Focus topic search failed ({exc}); delivering the digest without it")
+            focus = None
+        focus_papers = list(focus.papers) if focus else []
+
+        delivered = chosen + backfill + focus_papers
         if not delivered:
             logger.warning("No papers to deliver this week")
             return None
+
+        min_papers = int(self.config.report.min_papers)
+        if len(delivered) < min_papers:
+            # backfill_papers() already logs *why* it fell short (OpenAlex,
+            # exclude/dedup, or the relevance gate); this is the digest-level
+            # symptom, so it is visible even to someone only skimming for the
+            # final count rather than reading the full run log.
+            logger.warning(
+                f"Digest {label} delivered only {len(delivered)} papers "
+                f"({len(chosen)} fresh + {len(backfill)} backfilled), short of the "
+                f"{min_papers}-paper minimum even after backfill"
+            )
 
         pdf_rel = library_dir(anchor)
         download_fulltext(delivered, self.config, os.path.join(root, pdf_rel))
@@ -275,7 +324,9 @@ class WeeklyExecutor(Executor):
         fields = load_field_specs(self.config)
         extract_all(delivered, self.openai_client, self.config.llm, fields)
 
-        digest = build_digest(chosen, backfill, anchor, int(self.config.report.top_picks))
+        digest = build_digest(
+            chosen, backfill, anchor, int(self.config.report.top_picks), focus=focus
+        )
         md_rel, html_rel = report_paths(anchor)
         md_path = write_text(os.path.join(root, md_rel), render_markdown(digest, fields))
         html_path = write_text(os.path.join(root, html_rel), render_web_html(digest, fields))

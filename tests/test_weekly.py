@@ -247,9 +247,11 @@ def test_gate_passes_the_real_theme_names_and_descriptions_to_triage(weekly_conf
 
     seen: list = []
 
-    def spy(papers, client, llm_params, batch_size=8, themes=None):
+    def spy(papers, client, llm_params, batch_size=8, themes=None, require_theme_fit=True):
         seen.append(themes)
-        return real_triage(papers, client, llm_params, batch_size, themes=themes)
+        return real_triage(
+            papers, client, llm_params, batch_size, themes=themes, require_theme_fit=require_theme_fit
+        )
 
     monkeypatch.setattr("zotero_arxiv_daily.weekly.triage_papers", spy)
     WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
@@ -266,6 +268,51 @@ def test_a_candidate_the_model_says_fits_no_theme_is_excluded(weekly_config, stu
     assert stubbed["sent"] == []
 
 
+def test_backfill_is_gated_without_requiring_a_theme_fit(weekly_config, stubbed, monkeypatch):
+    """Fresh candidates must fit one of the library's real themes. A
+    highly-cited classic must not be held to that same bar: run 33517443909
+    rejected 13 of 13 backfill candidates on theme fit alone, none on
+    relevance and none on score, and shipped a 5-paper digest with an empty
+    "经典补位" section."""
+    from zotero_arxiv_daily.triage import triage_papers as real_triage
+
+    strictness: list = []
+
+    def spy(papers, client, llm_params, batch_size=8, themes=None, require_theme_fit=True):
+        strictness.append(require_theme_fit)
+        return real_triage(
+            papers, client, llm_params, batch_size, themes=themes, require_theme_fit=require_theme_fit
+        )
+
+    class RetrieverWithClassics:
+        name = "pubmed"
+
+        def __init__(self, config):
+            self.config = config
+
+        def search(self, query, start, end, limit):
+            return [make_candidate(i) for i in range(3)]
+
+        def search_highly_cited(self, query, limit):
+            classic = make_candidate(90)
+            classic.doi, classic.cited_by_count = "10.1000/classic", 900
+            return [classic]
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.triage_papers", spy)
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.weekly.get_query_retriever_cls", lambda name: RetrieverWithClassics
+    )
+    # "无" everywhere: every candidate is CMC-relevant but fits no theme.
+    stubbed["cluster_verdict"] = "无"
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+
+    assert strictness[0] is True, "fresh candidates keep the strict theme-fit bar"
+    assert strictness[-1] is False, "backfill is gated without requiring a theme fit"
+    # The strict pass drops every fresh candidate; the loose one keeps the classic.
+    assert digest is not None
+    assert [p.doi for p in digest.backfill] == ["10.1000/classic"]
+
+
 def test_a_candidate_the_model_reassigns_is_filed_under_its_corrected_theme(weekly_config, stubbed):
     """A verdict naming the *other* real theme overrides whichever cluster
     the embedding-only pass provisionally picked."""
@@ -274,6 +321,70 @@ def test_a_candidate_the_model_reassigns_is_filed_under_its_corrected_theme(week
     delivered = [paper for _, papers in digest.clusters for paper in papers]
     assert delivered
     assert all(paper.cluster == "HCP" for paper in delivered)
+
+
+# --------------------------------------------------------------------------- focus topic
+
+
+def test_no_focus_topic_means_no_focus_work_at_all(weekly_config, stubbed):
+    """The default. An operator who did not ask for this line must not pay
+    for it — no section, and nothing extra searched or prompted."""
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+    assert digest.focus is None
+    assert "特定主题" not in stubbed["sent"][0][1]
+
+
+def test_a_configured_focus_topic_reaches_the_digest_and_the_email(weekly_config, stubbed, monkeypatch):
+    from zotero_arxiv_daily.search.focus import FocusResult
+
+    focus = FocusResult(topic="连续制造", summary="一句话", papers=[make_candidate(77)])
+    seen: list = []
+
+    def fake_collect(config, client, retriever_for, start, end, exclude_dois=frozenset()):
+        seen.append((start, end, set(exclude_dois)))
+        return focus
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.collect_focus_papers", fake_collect)
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+
+    assert digest.focus is focus
+    assert "特定主题：连续制造" in stubbed["sent"][0][1]
+    start, end, excluded = seen[0]
+    # The same window the rest of the digest covers: the anchor Friday back six days.
+    assert (start, end) == (date(2026, 8, 14), date(2026, 8, 21))
+    assert excluded, "papers already chosen this week must not repeat in the focus section"
+
+
+def test_focus_papers_are_extracted_and_recorded_like_any_other(weekly_config, stubbed, monkeypatch):
+    """They are delivered papers: they get their fields extracted and their
+    DOIs remembered, or next week hands the reader the same paper again."""
+    from zotero_arxiv_daily.search.focus import FocusResult
+
+    paper = make_candidate(77)
+    monkeypatch.setattr(
+        "zotero_arxiv_daily.weekly.collect_focus_papers",
+        lambda *a, **kw: FocusResult(topic="连续制造", summary="", papers=[paper]),
+    )
+    WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+
+    assert paper.extraction, "focus papers go through the same extraction pass"
+    with open(str(weekly_config.search.seen_state), encoding="utf-8") as handle:
+        assert "10.1000/77" in json.load(handle)
+
+
+def test_a_broken_focus_line_does_not_cost_the_digest(weekly_config, stubbed, monkeypatch):
+    """The house rule the whole pipeline is built on: one component failing
+    must not take the run with it. The focus line is an optional extra, so
+    it least of all — losing a section beats losing the week's email."""
+    def boom(*args, **kwargs):
+        raise RuntimeError("focus search exploded")
+
+    monkeypatch.setattr("zotero_arxiv_daily.weekly.collect_focus_papers", boom)
+    digest = WeeklyExecutor(weekly_config).run(anchor=date(2026, 8, 21))
+
+    assert digest is not None
+    assert digest.focus is None
+    assert stubbed["sent"], "the digest still goes out without its focus section"
 
 
 # --------------------------------------------------------------------------- description-weighted assignment

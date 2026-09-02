@@ -50,11 +50,20 @@ def _merge_into(kept: Paper, duplicate: Paper) -> None:
 def dedup_papers(papers: list[Paper]) -> list[Paper]:
     """Collapse duplicates, keeping the first occurrence of each paper.
 
-    Papers carrying a DOI are keyed on it; only DOI-less papers fall back to
-    their title, so two genuinely different papers that share a title are
-    never merged.  The first occurrence keeps its identity but absorbs any
-    field the later duplicate knew and it did not — PubMed has no
-    open-access data, and losing Europe PMC's would waste a retrievable PDF.
+    Papers carrying a DOI are keyed on it first. Anything that does not match
+    by DOI still collapses into an existing paper with the exact same
+    (normalised) title — even when both sides carry a DOI and the two DOIs
+    differ. A source occasionally attaches the wrong DOI to an otherwise
+    correct record (title and abstract right, DOI pointing at an unrelated
+    work); refusing to merge on that mismatch is how the same review paper
+    ("Protein persulfidation in plants...") showed up twice in a delivered
+    digest, once under each DOI. A verbatim, many-word title collision
+    between two genuinely different papers is rare enough that trusting the
+    title here is the right trade-off. The first occurrence keeps its
+    identity — including its own DOI, even if the later duplicate's turns
+    out to be the "real" one — but absorbs any field the later duplicate
+    knew and it did not: PubMed has no open-access data, and losing Europe
+    PMC's would waste a retrievable PDF.
     """
     by_doi: dict[str, Paper] = {}
     by_title: dict[str, Paper] = {}
@@ -65,13 +74,7 @@ def dedup_papers(papers: list[Paper]) -> list[Paper]:
 
         existing = by_doi.get(doi) if doi else None
         if existing is None:
-            candidate = by_title.get(key)
-            # Match on title only when at least one side has no DOI: two
-            # different papers sharing a title must never be merged.
-            if candidate is not None:
-                other = normalize_doi(candidate.doi)
-                if other is None or doi is None or other == doi:
-                    existing = candidate
+            existing = by_title.get(key)
 
         if existing is not None:
             _merge_into(existing, paper)

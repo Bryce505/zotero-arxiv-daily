@@ -162,7 +162,9 @@ def _assign(batch: list[Paper], results: dict[int, TriageResult]) -> None:
         paper.triage = results.get(index)
 
 
-def _apply_theme_verdicts(papers: list[Paper], themes: dict[str, str] | None) -> None:
+def _apply_theme_verdicts(
+    papers: list[Paper], themes: dict[str, str] | None, require_theme_fit: bool = True
+) -> None:
     """Resolve each paper's ``TriageResult.cluster`` against its provisional
     (embedding-based) ``paper.cluster``, in place. Three outcomes:
 
@@ -170,20 +172,37 @@ def _apply_theme_verdicts(papers: list[Paper], themes: dict[str, str] | None) ->
       assignment ``assign_clusters`` made from embedding similarity alone.
     - the "无" sentinel: relevant to biologics CMC or not, the model judged
       this paper does not belong to any theme the library actually holds.
-      Routed through the existing "unjudged" path — nulling ``paper.triage``
-      — rather than a second gate, so it is excluded by machinery that is
-      already tested rather than by a new one that has to be kept in sync.
+      Under ``require_theme_fit`` (the default, and what fresh candidates
+      get) that is a rejection, routed through the existing "unjudged" path
+      — nulling ``paper.triage`` — rather than a second gate, so it is
+      excluded by machinery that is already tested rather than by a new one
+      that has to be kept in sync.
     - anything else (no ``themes`` given, or no usable verdict came back):
       leave ``paper.cluster`` exactly as it was.
+
+    ``require_theme_fit=False`` keeps the "无" papers instead, showing them
+    under whichever theme the embedding provisionally picked. That is the
+    bar highly-cited backfill is held to: run 33517443909 rejected 13 of 13
+    backfill candidates on theme fit alone — none on relevance, none on
+    score — because "does this belong to one of the five themes this week's
+    corpus clustered into" is a stricter, different question from "is this
+    classic worth reading for this library", and a decades-old landmark
+    paper answers the second far better than the first. Loosening removes
+    only the rejection: both numeric gates still apply, so a backfill
+    candidate the model scores at 30 still never lands in the digest.
     """
     if not themes:
         return
     rejected = 0
+    kept_without_fit = 0
     for paper in papers:
         verdict = paper.triage.cluster if paper.triage else None
         if verdict == _NO_THEME:
-            rejected += 1
-            paper.triage = None
+            if require_theme_fit:
+                rejected += 1
+                paper.triage = None
+            else:
+                kept_without_fit += 1
         elif verdict:
             paper.cluster = verdict
     if rejected:
@@ -191,6 +210,109 @@ def _apply_theme_verdicts(papers: list[Paper], themes: dict[str, str] | None) ->
             f"{rejected} candidate(s) read as relevant to biologics CMC in general "
             "but not judged to fit any current theme; excluded"
         )
+    if kept_without_fit:
+        logger.info(
+            f"{kept_without_fit} candidate(s) kept without a theme fit "
+            "(theme fit not required for this batch)"
+        )
+
+
+def _fill(papers: list[Paper], batch_size: int, judge, description: str) -> None:
+    """Run *judge* over *papers* in batches, filling ``paper.triage``.
+
+    The degradation ladder both rubrics share: retry the batch once, then
+    fall back to one call per paper, then leave the paper unjudged. Nothing
+    here raises — a paper with ``triage is None`` is treated as "did not
+    pass" downstream, which is the safe reading on a run where the model is
+    misbehaving.
+    """
+    batch_size = max(1, int(batch_size))
+    batches = [papers[i:i + batch_size] for i in range(0, len(papers), batch_size)]
+    for batch in tqdm(batches, desc=description):
+        for attempt in range(1, _BATCH_ATTEMPTS + 1):
+            try:
+                _assign(batch, judge(batch))
+                break
+            except Exception as exc:  # noqa: BLE001 - a bad batch must not kill the run
+                logger.warning(f"Triage batch attempt {attempt}/{_BATCH_ATTEMPTS} failed: {exc}")
+        else:
+            logger.warning(f"Falling back to one triage call per paper for {len(batch)} papers")
+            for paper in batch:
+                try:
+                    paper.triage = judge([paper]).get(1)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Triage failed for {paper.title!r}: {exc}")
+                    paper.triage = None
+
+
+_TOPIC_RUBRIC_TEMPLATE = """你是一位科研文献筛选专家。用户指定了一个自己关注的主题，请判断每篇文献与**这个主题**的相关程度。
+
+用户关注的主题：{topic}
+{background}
+**第一条，优先于其它一切判断：主题里点名的研究对象，文献必须真的研究它。**
+主题若点名了具体对象——某个药物、分子、蛋白、材料、技术或方法——而文献研究的是**另一个**对象，
+那么无论它用的方法多么邻近、多么值得借鉴，最高只能给 50 分。方法学相似不等于对题。
+
+评分标准：
+- 80-100：文献研究的就是主题点名的那个对象，且切入角度与主题一致。
+- 60-79：研究对象确实是主题点名的那个，但切入角度不同（例如主题问动力学、文献讲临床疗效）。
+- 30-59：研究对象不是主题点名的那个，只是方法学、领域或名词相近——**换了对象一律落在这一档**。
+- 0-29：与该主题毫无关系。
+
+举一个真实的反例：主题是「乌司他丁：酶抑制活性动力学研究」时，一篇讲黄嘌呤氧化酶抑制动力学的论文、
+一篇讲酪氨酸酶抑制动力学的论文、一篇讲胆碱酯酶抑制剂动力学的论文，都研究的是别的酶，
+即使动力学方法完全可以借鉴，也必须落在 30-59 档，不能给到 60 以上。
+
+只按用户给的主题判断，不要替换成你认为更重要的主题，也不要因为文献本身质量高就抬分。
+reason 用一句话说清「对这个主题有什么用」或「为什么不对题」，不超过 40 字。"""
+
+_TOPIC_OUTPUT_SPEC = """只输出 JSON 数组，每篇一项，键名完全一致：
+[{"index": 1, "relevance": 0-100 的整数, "reason": "一句话"}]"""
+
+
+def _topic_prompt(batch: list[Paper], topic: str, background: str) -> str:
+    entries = "\n\n".join(
+        f"[{i}] 标题：{paper.title}\n摘要：{truncate_for_prompt(paper.abstract or '', _MAX_ABSTRACT_TOKENS)}"
+        for i, paper in enumerate(batch, 1)
+    )
+    context = f"用户补充的背景：{background}\n" if background else ""
+    rubric = _TOPIC_RUBRIC_TEMPLATE.format(topic=topic, background=context)
+    return f"{rubric}\n\n{_TOPIC_OUTPUT_SPEC}\n\n待判定文献（共 {len(batch)} 篇）：\n\n{entries}"
+
+
+def triage_for_topic(
+    papers: list[Paper],
+    client,
+    llm_params: dict,
+    topic: str,
+    background: str = "",
+    batch_size: int = 8,
+) -> None:
+    """Judge each paper against the *user's* topic; never raises.
+
+    Deliberately a separate rubric from the biologics-CMC one. The focus
+    topic is whatever the operator asked for, and can sit entirely outside
+    biologics CMC — scoring it against the CMC rubric would file the very
+    papers they asked for in the 20-54 "only the nouns overlap" band and
+    drop all of them, which would make the feature pointless.
+    """
+    if not papers or not str(topic or "").strip():
+        return
+    _fill(
+        papers,
+        batch_size,
+        lambda batch: _parse_rows(
+            client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "你只输出 JSON 数组，不输出任何解释。"},
+                    {"role": "user", "content": _topic_prompt(batch, topic, background)},
+                ],
+                **llm_params.get("generation_kwargs", {}),
+            ).choices[0].message.content,
+            len(batch),
+        ),
+        f"Triaging for {topic}",
+    )
 
 
 def triage_papers(
@@ -199,6 +321,7 @@ def triage_papers(
     llm_params: dict,
     batch_size: int = 8,
     themes: dict[str, str] | None = None,
+    require_theme_fit: bool = True,
 ) -> None:
     """Fill ``paper.triage`` for every paper; never raises.
 
@@ -212,26 +335,14 @@ def triage_papers(
     what the library's themes actually cover (see ``_apply_theme_verdicts``)
     and, when omitted, reproduces the exact prompt and behaviour this
     function had before that check existed.
-    """
-    batch_size = max(1, int(batch_size))
-    batches = [papers[i:i + batch_size] for i in range(0, len(papers), batch_size)]
-    for batch in tqdm(batches, desc="Triaging candidates"):
-        for attempt in range(1, _BATCH_ATTEMPTS + 1):
-            try:
-                _assign(batch, _triage_batch(batch, client, llm_params, themes))
-                break
-            except Exception as exc:  # noqa: BLE001 - a bad batch must not kill the run
-                logger.warning(f"Triage batch attempt {attempt}/{_BATCH_ATTEMPTS} failed: {exc}")
-        else:
-            logger.warning(f"Falling back to one triage call per paper for {len(batch)} papers")
-            for paper in batch:
-                try:
-                    paper.triage = _triage_batch([paper], client, llm_params, themes).get(1)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(f"Triage failed for {paper.title!r}: {exc}")
-                    paper.triage = None
 
-    _apply_theme_verdicts(papers, themes)
+    ``require_theme_fit=False`` keeps a paper the model judged to fit none
+    of those themes, rather than excluding it — see
+    ``_apply_theme_verdicts`` for why backfill is held to that looser bar.
+    """
+    _fill(papers, batch_size, lambda batch: _triage_batch(batch, client, llm_params, themes), "Triaging candidates")
+
+    _apply_theme_verdicts(papers, themes, require_theme_fit)
 
     unjudged = sum(1 for p in papers if p.triage is None)
     if unjudged:

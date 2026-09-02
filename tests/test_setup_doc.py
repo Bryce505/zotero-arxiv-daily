@@ -214,3 +214,21 @@ def test_the_list_fields_are_the_ones_the_design_settled_on(composed):
         "conclusion": "list",
         "insight": "list",
     }
+
+
+def test_every_optional_env_knob_in_base_config_reaches_the_weekly_workflow():
+    """The quieter half of the bug the guard above catches.
+
+    A name interpolated *with* a default cannot crash config composition, so
+    that guard ignores it — but an operator who sets FOCUS_TOPIC and never
+    sees a focus section has hit exactly the same wiring gap, just silently.
+    Only the weekly pipeline reads config/base.yaml's optional knobs, so only
+    that workflow has to export them.
+    """
+    base = (REPO / "config" / "base.yaml").read_text(encoding="utf-8")
+    optional = {name for name, default in _INTERPOLATION_RE.findall(base) if default}
+    assert optional, "base.yaml interpolates nothing optional; the regex must have rotted"
+    assert not optional - exported_env("weekly.yml"), (
+        "config/base.yaml reads these but weekly.yml never exports them, so setting "
+        f"them does nothing: {sorted(optional - exported_env('weekly.yml'))}"
+    )

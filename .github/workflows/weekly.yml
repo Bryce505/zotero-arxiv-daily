@@ -34,6 +34,11 @@ jobs:
           SENDER: ${{ secrets.SENDER }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECIPIENTS: ${{ secrets.RECIPIENTS }}
+          # Either place works: a topic is not a secret, but an operator who
+          # adds it as one should not have to discover that it silently did
+          # nothing. An unset name is an empty string, so || picks the other.
+          FOCUS_TOPIC: ${{ secrets.FOCUS_TOPIC || vars.FOCUS_TOPIC }}
+          FOCUS_BACKGROUND: ${{ secrets.FOCUS_BACKGROUND || vars.FOCUS_BACKGROUND }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
         run: |
           printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
