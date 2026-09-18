@@ -111,6 +111,7 @@ zotero-arxiv-daily/
 │   └── custom.yaml                   本地跑/读测试默认值用的示例；CI 中被 CUSTOM_CONFIG 整份覆写
 ├── tests/                          测试，目录结构与 src/ 一一对应
 ├── docs/
+│   ├── retrieval-logic.md              检索逻辑解剖：逻辑图、流程图、关键节点为什么这么设计
 │   ├── cmc-literature-weekly-plan.md   周报管线的设计文档：需求、架构决策的完整讨论过程
 │   └── cmc-weekly-setup.md             部署与首跑实测记录，含可直接复制的 CUSTOM_CONFIG 样例
 ├── assets/                         README 用到的配置截图
