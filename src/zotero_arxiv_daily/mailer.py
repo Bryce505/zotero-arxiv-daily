@@ -14,7 +14,10 @@ from email.message import EmailMessage
 
 from loguru import logger
 
-MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+# 10MB, not the provider's nominal limit: run 35361805170 queued ~19MB and the
+# server stopped draining the socket mid-body. What does not fit is still in
+# library/ and linked from the report.
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 # Short on purpose: an SSL-only port (465 is the shipped default) has to time
 # out on the plaintext greeting for the SSL fallback below to be reached.
 SMTP_CONNECT_TIMEOUT_SECONDS = 60
