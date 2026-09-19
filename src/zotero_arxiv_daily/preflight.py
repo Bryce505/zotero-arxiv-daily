@@ -24,7 +24,7 @@ from omegaconf import DictConfig
 from openai import OpenAI
 
 from zotero_arxiv_daily.executor import Executor
-from zotero_arxiv_daily.mailer import SMTP_TIMEOUT_SECONDS, _safe_get, resolve_recipients
+from zotero_arxiv_daily.mailer import SMTP_CONNECT_TIMEOUT_SECONDS, _safe_get, resolve_recipients
 from zotero_arxiv_daily.reranker import get_reranker_cls
 from zotero_arxiv_daily.retriever import get_query_retriever_cls
 from zotero_arxiv_daily.search.profile import QueryProfile, query_for_source
@@ -185,7 +185,7 @@ def check_smtp(config: DictConfig) -> CheckResult:
     server = None
     try:
         try:
-            server = smtplib.SMTP(settings.smtp_server, settings.smtp_port, timeout=SMTP_TIMEOUT_SECONDS)
+            server = smtplib.SMTP(settings.smtp_server, settings.smtp_port, timeout=SMTP_CONNECT_TIMEOUT_SECONDS)
             server.starttls()
         except Exception:  # noqa: BLE001 - many providers are SSL-only on 465
             if server is not None:
@@ -193,7 +193,7 @@ def check_smtp(config: DictConfig) -> CheckResult:
                     server.close()
                 except Exception:  # noqa: BLE001
                     pass
-            server = smtplib.SMTP_SSL(settings.smtp_server, settings.smtp_port, timeout=SMTP_TIMEOUT_SECONDS)
+            server = smtplib.SMTP_SSL(settings.smtp_server, settings.smtp_port, timeout=SMTP_CONNECT_TIMEOUT_SECONDS)
         server.login(settings.sender, settings.sender_password)
         server.quit()
     except Exception as exc:  # noqa: BLE001

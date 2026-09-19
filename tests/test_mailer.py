@@ -363,3 +363,136 @@ def test_an_attachment_that_still_fits_once_encoded_is_kept(tmp_path):
     path = tmp_path / "ok.pdf"
     path.write_bytes(b"x" * 600)
     assert [a.filename for a in select_attachments([str(path)], max_total_bytes=1000)] == ["ok.pdf"]
+
+
+def test_the_data_write_gets_a_longer_timeout_than_the_greeting(monkeypatch):
+    """Run 35361805170: a ~19MB body stalled past the 60s connect timeout.
+
+    smtplib re-raises a timed-out sock.sendall() as SMTPServerDisconnected
+    ('Server not connected'), so the 60s that exists only to make an SSL-only
+    port fall through must not still be in force during the DATA write.
+    """
+    import smtplib
+
+    from zotero_arxiv_daily.mailer import SMTP_CONNECT_TIMEOUT_SECONDS, SMTP_DATA_TIMEOUT_SECONDS
+
+    timeouts = []
+
+    class StubSock:
+        def settimeout(self, value):
+            timeouts.append(value)
+
+    class StubSMTP:
+        def __init__(self, server, port, timeout=None):
+            timeouts.append(timeout)
+            self.sock = StubSock()
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def send_message(self, msg, from_addr=None, to_addrs=None):
+            timeouts.append("send")
+
+        def quit(self):
+            pass
+
+    monkeypatch.setattr(smtplib, "SMTP", StubSMTP)
+    send_digest(make_config(), "S", "<p>hi</p>", [])
+    assert timeouts == [SMTP_CONNECT_TIMEOUT_SECONDS, SMTP_DATA_TIMEOUT_SECONDS, "send"]
+    assert SMTP_DATA_TIMEOUT_SECONDS > SMTP_CONNECT_TIMEOUT_SECONDS
+
+
+def test_a_message_the_provider_will_not_swallow_is_retried_without_attachments(monkeypatch):
+    """The PDFs are also archived in the repo; the digest itself is not."""
+    import smtplib
+
+    from zotero_arxiv_daily.mailer import Attachment
+
+    sent = []
+
+    class StubSMTP:
+        def __init__(self, server, port, timeout=None):
+            pass
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def send_message(self, msg, from_addr=None, to_addrs=None):
+            payload = msg.get_payload()
+            attached = [p for p in payload if p.get_filename()] if isinstance(payload, list) else []
+            sent.append(len(attached))
+            if attached:
+                raise smtplib.SMTPServerDisconnected("Server not connected")
+
+        def close(self):
+            pass
+
+        def quit(self):
+            pass
+
+    monkeypatch.setattr(smtplib, "SMTP", StubSMTP)
+    send_digest(make_config(), "S", "<p>hi</p>", [Attachment("a.pdf", b"x", "pdf")])
+    assert sent == [1, 0]
+
+
+def test_a_bare_message_that_fails_still_raises(monkeypatch):
+    """Without attachments to drop there is no second chance to hide."""
+    import smtplib
+
+    class StubSMTP:
+        def __init__(self, server, port, timeout=None):
+            pass
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def send_message(self, msg, from_addr=None, to_addrs=None):
+            raise smtplib.SMTPServerDisconnected("Server not connected")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(smtplib, "SMTP", StubSMTP)
+    with pytest.raises(smtplib.SMTPServerDisconnected):
+        send_digest(make_config(), "S", "<p>hi</p>", [])
+
+
+def test_a_dropped_connection_at_quit_does_not_resend_the_digest(monkeypatch):
+    """163/QQ hang up instead of answering QUIT; the mail has already gone."""
+    import smtplib
+
+    from zotero_arxiv_daily.mailer import Attachment
+
+    sends = {"count": 0}
+
+    class StubSMTP:
+        def __init__(self, server, port, timeout=None):
+            pass
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def send_message(self, msg, from_addr=None, to_addrs=None):
+            sends["count"] += 1
+
+        def close(self):
+            pass
+
+        def quit(self):
+            raise smtplib.SMTPServerDisconnected("Server not connected")
+
+    monkeypatch.setattr(smtplib, "SMTP", StubSMTP)
+    send_digest(make_config(), "S", "<p>hi</p>", [Attachment("a.pdf", b"x", "pdf")])
+    assert sends["count"] == 1
